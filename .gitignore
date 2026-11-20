@@ -1,0 +1,14 @@
+# SwiftPM/Xcode build products and local dependency environments
+.build/
+
+# Local release outputs and verification backups
+artifacts/
+dist/
+
+# macOS metadata
+.DS_Store
+
+# Local editor and tool state
+.vscode/
+.idea/
+*.swp
