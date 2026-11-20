@@ -11,7 +11,9 @@ final class IslandController: NSObject {
     let batteryMonitor = BatteryMonitor()
     let mediaKeys = MediaKeyInterceptor()
     let musicApp = MusicAppMonitor()
+    private let lyricsLookup = LyricsLookup()
     let alarmManager = AlarmManager()
+    let focusMonitor = SystemFocusMonitor()
     let fileShelf = FileShelf()
     let clipboardHistory = ClipboardHistory()
     let airPods = AirPodsMonitor()
@@ -66,6 +68,7 @@ final class IslandController: NSObject {
         selectedTab = IslandPreferences.shared.resolvedTab(selectedTab) ?? selectedTab
         window.reposition(); renderUnderlying(); window.orderFrontRegardless()
         volumeMonitor.start()
+        focusMonitor.setEnabled(IslandPreferences.shared.isEnabled(.focus))
         brightnessMonitor.setEnabled(IslandPreferences.shared.systemHUDEnabled)
         inputMonitor.setEnabled(IslandPreferences.shared.inputHUDEnabled)
         batteryMonitor.setEnabled(IslandPreferences.shared.powerHUDEnabled)
@@ -82,11 +85,11 @@ final class IslandController: NSObject {
         if ((IslandPreferences.shared.takeover && IslandPreferences.shared.systemHUDEnabled) || IslandPreferences.shared.notificationsEnabled) && !MediaKeyInterceptor.isTrusted { _ = MediaKeyInterceptor.requestTrust() }
         print("[Island] screen=\(String(describing: IslandPreferences.shared.screen?.frame)) window=\(window.frame) \(islandView.debugGeometry())")
         observe(.islandPreferencesChanged, center: .default) { [weak self] in self?.applyPreferences() }
-        observe(NSApplication.didBecomeActiveNotification, center: .default) { [weak self] in self?.window.reposition() }
+        observe(NSApplication.didBecomeActiveNotification, center: .default) { [weak self] in self?.window.reposition(); self?.focusMonitor.refresh() }
         observe(NSApplication.didChangeScreenParametersNotification, center: .default) { [weak self] in self?.window.reposition(); self?.updateEnvironment() }
         observe(NSWorkspace.didActivateApplicationNotification, center: NSWorkspace.shared.notificationCenter) { [weak self] in self?.updateEnvironment() }
         observe(NSWorkspace.activeSpaceDidChangeNotification, center: NSWorkspace.shared.notificationCenter) { [weak self] in self?.updateEnvironment() }
-        observe(NSWorkspace.didWakeNotification, center: NSWorkspace.shared.notificationCenter) { [weak self] in self?.window.reposition(); self?.musicApp.refresh(); self?.airPods.didWake(); self?.updateEnvironment() }
+        observe(NSWorkspace.didWakeNotification, center: NSWorkspace.shared.notificationCenter) { [weak self] in self?.window.reposition(); self?.musicApp.refresh(); self?.airPods.didWake(); self?.focusMonitor.didWake(); self?.updateEnvironment() }
         observe(NSWorkspace.willSleepNotification, center: NSWorkspace.shared.notificationCenter) { [weak self] in self?.suspendAirPodsForSleep(); self?.window.orderOut(nil); self?.islandView.setActivityVisible(false) }
         let environment = Timer(timeInterval: 5, repeats: true) { [weak self] _ in self?.updateEnvironment() }; environment.tolerance = 1; RunLoop.main.add(environment, forMode: .common); environmentTimer = environment
         if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .mouseMoved, .leftMouseDragged, .leftMouseUp], handler: { [weak self] event in
@@ -117,7 +120,14 @@ final class IslandController: NSObject {
     func startDebug() { isDebug = true; window.reposition(); islandView.shelf = fileShelf; window.orderFrontRegardless(); renderUnderlying() }
     func debugPresent(_ state: IslandState) { currentState = state; islandView.timerSession = alarmManager.session; islandView.render(state) }
     private func setupCallbacks() {
+        lyricsLookup.onChange = { [weak self] lines in
+            guard let self, self.nowPlayingInfo?.lyrics != lines else { return }
+            self.nowPlayingInfo?.lyrics = lines
+            self.updateMediaPresentation()
+        }
+        islandView.onFootprintChange = { [weak self] in self?.repositionSideNotification() }
         islandView.shelf = fileShelf
+        focusMonitor.onChange = { [weak self] state in self?.islandView.updateFocus(state) }
         islandView.clipboard = clipboardHistory
         clipboardHistory.onChange = { [weak self] in self?.islandView.refreshClipboard() }
         audioOutputs.onChange = { [weak self] in self?.updateConnectedPanels() }
@@ -182,7 +192,7 @@ final class IslandController: NSObject {
         musicApp.onStatus = { [weak self] status in self?.musicAppStatus = status }
         nowPlaying.onStateChange = { [weak self] info in self?.fallbackInfo = info; self?.selectMedia() }
         alarmManager.onTimerTick = { [weak self] _ in
-            guard let self else { return }; self.islandView.timerSession = IslandPreferences.shared.isEnabled(.timer) && IslandPreferences.shared.focusDisplayEnabled ? self.alarmManager.session : nil
+            guard let self else { return }; self.islandView.timerSession = IslandPreferences.shared.isEnabled(.timer) ? self.alarmManager.session : nil
             self.islandView.refreshTimer()
             if case .idle = self.policy.surface, !self.policy.transientVisible { self.renderUnderlying() }
         }
@@ -238,7 +248,16 @@ final class IslandController: NSObject {
                 nowPlayingInfo = info
             }
         } else { playbackIntent = nil }
+        applySelectedLyrics()
         updateMediaPresentation()
+    }
+    private func applySelectedLyrics() {
+        let prefs = IslandPreferences.shared
+        let query = prefs.isEnabled(.music) && prefs.showsAnyLyrics
+            ? LyricsQuery(nowPlayingInfo, directory: prefs.lyricsDirectory, online: prefs.onlineLyrics)
+            : nil
+        let lines = lyricsLookup.select(query)
+        nowPlayingInfo?.lyrics = lines
     }
     private func togglePlayback() {
         guard var info = nowPlayingInfo else { return }
@@ -254,7 +273,6 @@ final class IslandController: NSObject {
         islandView.mediaInfo = nowPlayingInfo
         islandView.compactMediaVisible = IslandPreferences.shared.isEnabled(.music) && compactActivity.isVisible()
         islandView.refreshCompact()
-        if case .panel(.music) = policy.surface { islandView.render(.workspace(.music, false)) }
         renderIfIdle()
         updateWorkTimers()
     }
@@ -272,26 +290,56 @@ final class IslandController: NSObject {
     }
     private func drainActivities() {
         pendingActivities.removeAll { Date().timeIntervalSince($0.date) > 30 }
-        if sideNotification.isVisible { return }
-        guard !policy.transientVisible, policy.surface != .alert, !pointerInside, !interacting, !dropActive, !pendingActivities.isEmpty else { return }
-        let activity = pendingActivities.removeFirst().state
-        if case .notification(let item) = activity, IslandPreferences.shared.notificationPlacement == .sides {
-            sideNotification.show(item, seconds: 6) { [weak self] in self?.drainActivities() }
-            item.dismissNativeBanner?()
-            updateWorkTimers()
-            return
+        guard !hidden, !suppressed, !compactOnly, policy.surface != .alert else { return }
+        if IslandPreferences.shared.notificationPlacement == .sides, !sideNotification.isPresenting,
+           let index = pendingActivities.firstIndex(where: { if case .notification = $0.state { return true }; return false }),
+           case .notification(let item) = pendingActivities[index].state,
+           showNotification(item, seconds: 6) {
+            pendingActivities.remove(at: index)
         }
-        if presentTransient(activity, seconds: 6), case .notification(let item) = activity {
-            // Only dismiss the native banner after our window is actually visible.
-            window.orderFrontRegardless(); item.dismissNativeBanner?()
+        guard !policy.transientVisible, !pointerInside, !interacting, !dropActive,
+              let index = pendingActivities.firstIndex(where: {
+                  if case .notification = $0.state { return IslandPreferences.shared.notificationPlacement == .island }
+                  return true
+              }) else { return }
+        // Remove before presenting: presentTransient synchronously re-enters updatePointer.
+        let entry = pendingActivities.remove(at: index)
+        let shown: Bool
+        if case .notification(let item) = entry.state { shown = showNotification(item, seconds: 6) }
+        else { shown = presentTransient(entry.state, seconds: 6) }
+        if !shown { pendingActivities.insert(entry, at: min(index, pendingActivities.count)) }
+    }
+    private var sideNotificationFrame: CGRect? {
+        guard let screen = IslandPreferences.shared.screen, let obstacle = islandView.occupiedScreenFrame else { return nil }
+        return IslandPreferences.shared.notificationSide.cardFrame(in: screen.visibleFrame, avoiding: obstacle)
+    }
+    private func repositionSideNotification() {
+        guard sideNotification.isPresenting, let frame = sideNotificationFrame,
+              frame != sideNotification.frame else { return }
+        sideNotification.setFrame(frame, display: true)
+    }
+    @discardableResult private func showNotification(_ item: IslandNotification, seconds: TimeInterval) -> Bool {
+        guard !hidden, !suppressed, !compactOnly, policy.surface != .alert else { return false }
+        if IslandPreferences.shared.notificationPlacement == .sides {
+            guard let frame = sideNotificationFrame, sideNotification.show(item, frame: frame,
+                  previews: IslandPreferences.shared.notificationPreview, seconds: seconds, onDismiss: { [weak self] in
+                      self?.drainActivities()
+                      self?.updateWorkTimers()
+                  }) else { return false }
+        } else {
+            guard presentTransient(.notification(item), seconds: seconds) else { return false }
+            window.orderFrontRegardless()
         }
+        item.dismissNativeBanner?()
+        return true
     }
     private func dismissActivity() {
         hoverDismissed = true
         policy.expireTransient(); transient = nil; renderUnderlying(); drainActivities()
     }
     private func suspendAirPodsForSleep() {
-        sideNotification.orderOut(nil)
+        sideNotification.cancel()
+        pendingActivities.removeAll { if case .notification = $0.state { return true }; return false }
         airPods.suspendAutomaticPresentation()
         pendingActivities.removeAll { if case .airPods = $0.state { return true }; return false }
         if case .airPods = transient { policy.expireTransient(); transient = nil; renderUnderlying() }
@@ -308,7 +356,9 @@ final class IslandController: NSObject {
         }
     }
     func previewAirPods() { _ = presentTransient(.airPods(.demo), seconds: 7) }
-    func previewNotification() { _ = presentTransient(.notification(.demo), seconds: 7) }
+    func previewNotification() {
+        if !showNotification(.demo, seconds: 7) { enqueueActivity(.notification(.demo)) }
+    }
     func enableCalendar() {
         IslandPreferences.shared.calendarEnabled = true
         calendar.setEnabled(IslandPreferences.shared.isEnabled(.calendar)); calendar.requestAccess(); updateConnectedPanels()
@@ -348,7 +398,7 @@ final class IslandController: NSObject {
     }
     private func renderUnderlying() {
         guard !policy.transientVisible else { return }
-        islandView.mediaInfo = IslandPreferences.shared.isEnabled(.music) ? nowPlayingInfo : nil; islandView.timerSession = IslandPreferences.shared.isEnabled(.timer) && IslandPreferences.shared.focusDisplayEnabled ? alarmManager.session : nil
+        islandView.mediaInfo = IslandPreferences.shared.isEnabled(.music) ? nowPlayingInfo : nil; islandView.timerSession = IslandPreferences.shared.isEnabled(.timer) ? alarmManager.session : nil
         islandView.compactMediaVisible = IslandPreferences.shared.isEnabled(.music) && compactActivity.isVisible()
         switch policy.surface {
         case .alert: return
@@ -373,6 +423,7 @@ final class IslandController: NSObject {
         if selectedTab == .music { musicApp.refresh() }
         if selectedTab == .audio { audioOutputs.refresh() }
         if selectedTab == .calendar { calendar.refresh() }
+        if selectedTab == .focus { focusMonitor.refresh() }
         updateConnectedPanels()
     }
     private func dismissToIdle() {
@@ -456,6 +507,8 @@ final class IslandController: NSObject {
     }
     private func updateVisibility() {
         let visible = (!hidden && !suppressed) || policy.surface == .alert
+        if hidden || suppressed || compactOnly || policy.surface == .alert { sideNotification.cancel() }
+        else { repositionSideNotification() }
         if visible { if !wasVisible || !window.isVisible { window.reposition(); window.orderFrontRegardless() } }
         else { window.orderOut(nil) }
         wasVisible = visible
@@ -463,6 +516,7 @@ final class IslandController: NSObject {
     }
     private func applyPreferences() {
         let preferences = IslandPreferences.shared
+        focusMonitor.setEnabled(preferences.isEnabled(.focus))
         let rules = "\(preferences.displayID)|\(preferences.fullscreenMode)|\(preferences.excludedApps)"
         if presentationRules != rules { presentationRules = rules; window.reposition(); keepAlive(); updateEnvironment() }
         if preferences.takeover && preferences.systemHUDEnabled { setupMediaKeyTakeover() } else { mediaKeys.stop() }
@@ -478,6 +532,8 @@ final class IslandController: NSObject {
         audioOutputs.setEnabled(preferences.isEnabled(.audio))
         if !preferences.isEnabled(.files) { dropActive = false }
         if !preferences.isEnabled(.music) { nowPlayingInfo = nil; musicAppInfo = nil; fallbackInfo = nil; compactActivity.update(hasMedia: false, playing: false) }
+        applySelectedLyrics()
+        islandView.mediaInfo = nowPlayingInfo
         if let resolved = preferences.resolvedTab(selectedTab) {
             if selectedTab != resolved { window.makeFirstResponder(nil); interacting = false }
             selectedTab = resolved
@@ -499,8 +555,36 @@ final class IslandController: NSObject {
             }
             if disabled { self.transient = nil; policy.expireTransient() }
         }
-        updateConnectedPanels(); renderUnderlying()
+        reconcileNotificationPresentation()
+        updateConnectedPanels(); renderUnderlying(); drainActivities()
         (NSApp.delegate as? AppDelegate)?.rebuildMenu()
+    }
+    func reconcileNotificationPresentation() {
+        let prefs = IslandPreferences.shared
+        if var item = sideNotification.item {
+            let allowed = item.identity == "preview" || (item.identity.hasPrefix("meeting-") ? prefs.isEnabled(.calendar) : prefs.notificationsEnabled)
+            guard allowed else { sideNotification.cancel(); return }
+            if prefs.notificationPlacement == .sides {
+                sideNotification.setPreviews(prefs.notificationPreview)
+                repositionSideNotification()
+                return
+            }
+            let seconds = sideNotification.expiresAt.timeIntervalSinceNow
+            sideNotification.cancel()
+            guard seconds > 0 else { return }
+            item.dismissNativeBanner = nil
+            if policy.transientVisible || !showNotification(item, seconds: seconds) {
+                pendingActivities.insert((.notification(item), Date()), at: 0)
+            }
+        } else if prefs.notificationPlacement == .sides, case .notification(var item) = transient {
+            let seconds = transientEnd.timeIntervalSinceNow
+            guard seconds > 0 else { return }
+            item.dismissNativeBanner = nil
+            if showNotification(item, seconds: seconds) {
+                policy.expireTransient()
+                transient = nil
+            }
+        }
     }
     func setHidden(_ value: Bool) { hidden = value; if value { dismissToIdle() }; updateVisibility() }
     func showMusic() { showPanel(.music) }

@@ -35,12 +35,12 @@ struct TimerSession: Codable, Equatable {
 }
 
 enum IslandTab: Int, CaseIterable {
-    case music, files, timer, audio, calendar, shortcuts, clipboard
+    case music, files, timer, audio, calendar, shortcuts, clipboard, focus
     var title: String {
-        switch self { case .music: return "音乐"; case .files: return "暂存"; case .timer: return "专注"; case .audio: return "声音"; case .calendar: return "日程"; case .shortcuts: return "快捷"; case .clipboard: return "剪贴板" }
+        switch self { case .music: return "音乐"; case .files: return "暂存"; case .timer: return "计时"; case .audio: return "声音"; case .calendar: return "日程"; case .shortcuts: return "快捷"; case .clipboard: return "剪贴板"; case .focus: return "专注" }
     }
     var symbol: String {
-        switch self { case .music: return "music.note"; case .files: return "tray"; case .timer: return "timer"; case .audio: return "hifispeaker"; case .calendar: return "calendar"; case .shortcuts: return "square.grid.2x2"; case .clipboard: return "doc.on.clipboard" }
+        switch self { case .music: return "music.note"; case .files: return "tray"; case .timer: return "timer"; case .audio: return "hifispeaker"; case .calendar: return "calendar"; case .shortcuts: return "square.grid.2x2"; case .clipboard: return "doc.on.clipboard"; case .focus: return "moon.fill" }
     }
     func moved(by delta: Int, among tabs: [IslandTab] = Self.allCases) -> IslandTab {
         guard !tabs.isEmpty else { return self }
@@ -56,6 +56,7 @@ enum IslandTab: Int, CaseIterable {
         case .calendar: return "下一场日程与会议提醒，需另行连接日历"
         case .shortcuts: return "常用应用、文件夹与快捷指令"
         case .clipboard: return "最近 30 条文字与图片，仅保存在内存，关闭即清空"
+        case .focus: return "当前系统专注模式与减少打扰状态"
         }
     }
 }

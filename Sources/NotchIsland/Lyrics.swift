@@ -1,6 +1,5 @@
 import Foundation
 
-/// A timestamped lyric line. Files stay local; no network or account access is required.
 struct LyricLine: Equatable {
     let time: TimeInterval
     let text: String
@@ -36,7 +35,7 @@ enum LyricsParser {
                 var fraction = 0.0
                 if match.numberOfRanges > 3, match.range(at: 3).location != NSNotFound, let fractionRange = Range(match.range(at: 3), in: raw) {
                     let fractionText = String(raw[fractionRange])
-                    if let value = Double(fractionText) { fraction = value / (fractionText.count <= 2 ? 100 : 1000) }
+                    fraction = Double("0." + fractionText) ?? 0
                 }
                 result.append(LyricLine(time: minutes * 60 + seconds + fraction, text: lyric))
             }
@@ -46,16 +45,24 @@ enum LyricsParser {
 }
 
 enum LyricsStore {
-    static func load(title: String, artist: String) -> [LyricLine] {
-        let directory = IslandPreferences.shared.lyricsDirectory
+    static func load(title: String, artist: String, directory: String) -> [LyricLine] {
         var roots = [URL(fileURLWithPath: directory, isDirectory: true)]
         let music = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Music/NotchIsland Lyrics", isDirectory: true)
         if music.path != directory { roots.append(music) }
-        let names = [title, "\(title) - \(artist)", "\(artist) - \(title)"]
+        let names = ["\(artist) - \(title)", "\(title) - \(artist)", title]
+        let byteLimit = 512 * 1024
         for root in roots {
             for name in names {
-                let url = root.appendingPathComponent(name).appendingPathExtension("lrc")
-                if let text = try? String(contentsOf: url, encoding: .utf8), !text.isEmpty { return LyricsParser.parse(text) }
+                let filename = name.replacingOccurrences(of: "/", with: "-")
+                let url = root.appendingPathComponent(filename).appendingPathExtension("lrc").resolvingSymlinksInPath()
+                guard url.deletingLastPathComponent().standardizedFileURL.path == root.resolvingSymlinksInPath().standardizedFileURL.path,
+                      (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+                      let file = try? FileHandle(forReadingFrom: url) else { continue }
+                defer { try? file.close() }
+                guard let data = try? file.read(upToCount: byteLimit + 1), data.count <= byteLimit,
+                      let text = String(data: data, encoding: .utf8) else { continue }
+                let lines = LyricsParser.parse(text)
+                if !lines.isEmpty { return lines }
             }
         }
         return []

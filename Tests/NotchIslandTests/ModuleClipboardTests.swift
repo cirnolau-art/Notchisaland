@@ -18,7 +18,7 @@ final class ModuleClipboardTests: XCTestCase {
     private func write(_ text: String, to board: NSPasteboard) { board.clearContents(); board.setString(text, forType: .string) }
     func testDefaultsPreserveExistingModulesAndClipboardIsOptIn() {
         preferences { prefs in
-            XCTAssertEqual(prefs.visibleTabs, [.music, .files, .timer, .audio, .calendar, .shortcuts])
+            XCTAssertEqual(prefs.visibleTabs, [.music, .files, .timer, .audio, .calendar, .shortcuts, .focus])
             XCTAssertFalse(prefs.isEnabled(.clipboard))
             prefs.setEnabled(.files, false); prefs.setEnabled(.clipboard, true)
             XCTAssertEqual(prefs.resolvedTab(.files), .music)

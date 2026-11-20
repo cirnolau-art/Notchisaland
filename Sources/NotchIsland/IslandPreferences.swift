@@ -3,7 +3,7 @@ import AppKit
 extension Notification.Name { static let islandPreferencesChanged = Notification.Name("NotchIsland.preferencesChanged") }
 
 final class IslandPreferences {
-    static let shared = IslandPreferences()
+    static let shared = IslandPreferences(defaults: SnapshotMode.enabled ? SnapshotMode.defaults : .standard)
     private let defaults: UserDefaults
     init(defaults: UserDefaults = .standard) { self.defaults = defaults }
     static var supportsGlass: Bool { if #available(macOS 26.0, *) { return true }; return false }
@@ -29,9 +29,33 @@ final class IslandPreferences {
     var notificationsEnabled: Bool { get { defaults.object(forKey: "notchisland.notificationsEnabled") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.notificationsEnabled"); changed() } }
     var notificationPreview: Bool { get { defaults.object(forKey: "notchisland.notificationPreview") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.notificationPreview"); changed() } }
     var notificationPlacement: NotificationPlacement { get { NotificationPlacement(rawValue: defaults.integer(forKey: "notchisland.notificationPlacement")) ?? .island } set { defaults.set(newValue.rawValue, forKey: "notchisland.notificationPlacement"); changed() } }
-    var lyricsPlacement: LyricsPlacement { get { LyricsPlacement(rawValue: defaults.object(forKey: "notchisland.lyricsPlacement") as? Int ?? LyricsPlacement.below.rawValue) ?? .below } set { defaults.set(newValue.rawValue, forKey: "notchisland.lyricsPlacement"); changed() } }
+    var notificationSide: NotificationSide {
+        get { NotificationSide(rawValue: defaults.integer(forKey: "notchisland.notificationSide")) ?? .right }
+        set { defaults.set(newValue.rawValue, forKey: "notchisland.notificationSide"); changed() }
+    }
+    var lyricsPlacement: LyricsPlacement {
+        get { LyricsPlacement(rawValue: defaults.object(forKey: "notchisland.lyricsPlacement") as? Int ?? LyricsPlacement.below.rawValue) ?? .below }
+        set {
+            // Preserve the old expanded preference the first time a 1.6 user edits the compact position.
+            if defaults.object(forKey: "notchisland.expandedLyricsPlacement") == nil {
+                defaults.set(expandedLyricsPlacement.rawValue, forKey: "notchisland.expandedLyricsPlacement")
+            }
+            defaults.set(newValue.rawValue, forKey: "notchisland.lyricsPlacement")
+            changed()
+        }
+    }
+    var expandedLyricsPlacement: LyricsPlacement {
+        get {
+            if let value = defaults.object(forKey: "notchisland.expandedLyricsPlacement") as? Int,
+               let placement = LyricsPlacement(rawValue: value) { return placement }
+            return lyricsPlacement == .hidden ? .hidden : .below
+        }
+        set { defaults.set(newValue.rawValue, forKey: "notchisland.expandedLyricsPlacement"); changed() }
+    }
+    var showsAnyLyrics: Bool { lyricsPlacement != .hidden || expandedLyricsPlacement != .hidden }
     var lyricsAnimation: LyricsAnimationStyle { get { LyricsAnimationStyle(rawValue: defaults.object(forKey: "notchisland.lyricsAnimation") as? Int ?? LyricsAnimationStyle.appleMusic.rawValue) ?? .appleMusic } set { defaults.set(newValue.rawValue, forKey: "notchisland.lyricsAnimation"); changed() } }
     var lyricsDirectory: String { get { defaults.string(forKey: "notchisland.lyricsDirectory") ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Music/NotchIsland Lyrics").path } set { defaults.set(newValue, forKey: "notchisland.lyricsDirectory"); changed() } }
+    var onlineLyrics: Bool { get { defaults.object(forKey: "notchisland.onlineLyrics") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.onlineLyrics"); changed() } }
     var focusDisplayEnabled: Bool { get { defaults.object(forKey: "notchisland.focusDisplayEnabled") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.focusDisplayEnabled"); changed() } }
     var displayID: UInt32 { get { UInt32(defaults.integer(forKey: "notchisland.displayID")) } set { defaults.set(Int(newValue), forKey: "notchisland.displayID"); changed() } }
     var hoverPreview: Bool { get { defaults.object(forKey: "notchisland.hoverPreview") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.hoverPreview"); changed() } }

@@ -5,6 +5,8 @@ import CoreAudio
 /// Isolated visual/interaction QA: no system listeners, player automation or real shelf data.
 enum SnapshotMode {
     static var enabled: Bool { CommandLine.arguments.contains("--snapshot") }
+    private static let defaultsSuite = "NotchIsland.snapshot.\(UUID().uuidString)"
+    static let defaults = UserDefaults(suiteName: defaultsSuite)!
     static var outputDir: String {
         if let i = CommandLine.arguments.firstIndex(of: "--snapshot-output"), CommandLine.arguments.indices.contains(i + 1) { return CommandLine.arguments[i + 1] }
         return "/tmp/notchisland-v13-snapshots"
@@ -21,7 +23,7 @@ enum SnapshotMode {
         clipboard.onChange = { [weak view] in view?.refreshClipboard() }
         let artwork = makeArtwork()
         var music = MediaInfo(title: "夜空中最亮的星", artist: "逃跑计划 · 世界", artwork: artwork, isPlaying: true, duration: 254, elapsed: 86, source: "Music", trackID: "sample")
-        music.lyrics = [LyricLine(time: 0, text: "穿过旷野的风"), LyricLine(time: 4, text: "你慢慢地走来"), LyricLine(time: 8, text: "把星光放在手心")]
+        music.lyrics = [LyricLine(time: 0, text: "穿过旷野的风"), LyricLine(time: 84, text: "你慢慢地走来"), LyricLine(time: 180, text: "把星光放在手心")]
         IslandPreferences.shared.lyricsPlacement = .below
         IslandPreferences.shared.lyricsAnimation = .appleMusic
         view.mediaInfo = music
@@ -33,6 +35,11 @@ enum SnapshotMode {
             ("01-compact", .idle(.music(music.title, artwork, nil, true))),
             ("02-preview", .workspace(.music, true)),
             ("03-music", .music(music)),
+            ("48-player-side-lyrics", .music(music)),
+            ("49-compact-side-lyrics", .idle(.music(music.title, artwork, nil, true))),
+            ("50-system-focus", .workspace(.focus, false)),
+            ("51-compact-focus", .idle(.time(""))),
+            ("52-system-focus-off", .workspace(.focus, false)),
             ("04-files-empty", .workspace(.files, false)),
             ("05-files", .workspace(.files, false)),
             ("06-timer-setup", .workspace(.timer, false)),
@@ -76,6 +83,7 @@ enum SnapshotMode {
                 runInteractionChecks(view)
                 clipboard.setEnabled(false); board.releaseGlobally()
                 saveSettings()
+                defaults.removePersistentDomain(forName: defaultsSuite)
                 let report = failures.isEmpty ? "PASS: visual states and interaction checks\n" : failures.joined(separator: "\n")
                 try? report.write(toFile: "\(outputDir)/verification.txt", atomically: true, encoding: .utf8)
                 print(report)
@@ -83,6 +91,10 @@ enum SnapshotMode {
                 return
             }
             let (name, state) = states[index]; index += 1
+            view.updateFocus(["50-system-focus", "51-compact-focus"].contains(name)
+                             ? .active(.resolve(identifier: "com.apple.focus.reduce-interruptions")) : .inactive)
+            IslandPreferences.shared.expandedLyricsPlacement = name == "48-player-side-lyrics" ? .side : .below
+            IslandPreferences.shared.lyricsPlacement = name == "49-compact-side-lyrics" ? .side : .below
             if name == "42-clipboard" {
                 for text in ["https://developer.apple.com", "把常用的内容，放在顺手的位置。", "周末计划\n散步、咖啡，然后好好休息。"] {
                     board.clearContents(); board.setString(text, forType: .string); clipboard.capture()
@@ -144,6 +156,21 @@ enum SnapshotMode {
         func check(_ condition: Bool, _ label: String) { if !condition { failures.append(label) } }
         func descendants(_ root: NSView) -> [NSView] { root.subviews.flatMap { [$0] + descendants($0) } }
         view.enabledTabsOverride = IslandTab.allCases
+        var lyricSample = MediaInfo(title: "时间轴", isPlaying: true, duration: 45, elapsed: 15)
+        lyricSample.lyrics = [.init(time: 0, text: "第一行"), .init(time: 15.15, text: "第二行")]
+        view.mediaInfo = lyricSample; view.compactMediaVisible = true
+        view.render(.idle(.time("")), animated: false)
+        func hasVisibleLine(_ text: String) -> Bool {
+            descendants(view).compactMap { $0 as? NSTextField }.contains { $0.stringValue == text && !$0.isHiddenOrHasHiddenAncestor }
+        }
+        check(hasVisibleLine("第一行"), "Compact lyric did not follow the playback sample")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.35))
+        check(hasVisibleLine("第二行"), "Compact lyric missed the next timestamp without a player refresh")
+        view.render(.notification(.demo), animated: false)
+        check(!hasVisibleLine("第二行"), "Compact lyric obscures the notification")
+        view.render(.idle(.time("")), animated: false)
+        view.compactMediaVisible = false; view.refreshCompact()
+        check(!hasVisibleLine("第二行"), "Compact lyric did not retract after playback")
         view.notificationPreviewOverride = nil
         view.backdropOverride = .init(style: .black, blur: 0.75, opacity: 0.58)
         var selected: IslandTab?

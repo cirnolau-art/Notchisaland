@@ -44,9 +44,12 @@ private struct IslandSettingsView: View {
     @State private var notificationsEnabled = IslandPreferences.shared.notificationsEnabled
     @State private var notificationPreview = IslandPreferences.shared.notificationPreview
     @State private var notificationPlacement = IslandPreferences.shared.notificationPlacement
+    @State private var notificationSide = IslandPreferences.shared.notificationSide
     @State private var lyricsPlacement = IslandPreferences.shared.lyricsPlacement
+    @State private var expandedLyricsPlacement = IslandPreferences.shared.expandedLyricsPlacement
     @State private var lyricsAnimation = IslandPreferences.shared.lyricsAnimation
     @State private var lyricsDirectory = IslandPreferences.shared.lyricsDirectory
+    @State private var onlineLyrics = IslandPreferences.shared.onlineLyrics
     @State private var focusDisplay = IslandPreferences.shared.focusDisplayEnabled
     @State private var airPodsStatus = ""
     @State private var notificationStatus = ""
@@ -196,8 +199,16 @@ private struct IslandSettingsView: View {
                 Toggle("接收系统通知横幅", isOn: $notificationsEnabled).onChange(of: notificationsEnabled) { _, value in IslandPreferences.shared.notificationsEnabled = value }
                 Toggle("显示通知标题与正文", isOn: $notificationPreview).onChange(of: notificationPreview) { _, value in IslandPreferences.shared.notificationPreview = value }
                 Picker("通知位置", selection: $notificationPlacement) { ForEach(NotificationPlacement.allCases, id: \.rawValue) { Text($0.title).tag($0) } }.pickerStyle(.segmented).onChange(of: notificationPlacement) { _, value in IslandPreferences.shared.notificationPlacement = value }
+                if notificationPlacement == .sides {
+                    Picker("小窗口位置", selection: $notificationSide) {
+                        Text("刘海左侧").tag(NotificationSide.left)
+                        Text("刘海右侧").tag(NotificationSide.right)
+                    }.pickerStyle(.segmented).onChange(of: notificationSide) { _, value in
+                        IslandPreferences.shared.notificationSide = value
+                    }
+                }
                 Text(notificationStatus.isEmpty ? IslandController.shared.notificationStatus : notificationStatus).font(.system(size: 11)).foregroundStyle(.secondary)
-                HStack { Button("预览刘海通知") { IslandController.shared.previewNotification() }; Button("重新连接") { IslandController.shared.notificationBridge.reconnect() }; Button("辅助功能设置") { openPrivacy("Accessibility") } }
+                HStack { Button("预览通知") { IslandController.shared.previewNotification() }; Button("重新连接") { IslandController.shared.notificationBridge.reconnect() }; Button("辅助功能设置") { openPrivacy("Accessibility") } }
                 Text("需要辅助功能权限，并保留来源应用的系统横幅。两侧小窗口不改变刘海尺寸；专注／勿扰模式延后投递的通知不会显示。").font(.system(size: 11)).foregroundStyle(.secondary)
             }
         }
@@ -277,16 +288,23 @@ private struct IslandSettingsView: View {
                 Text(musicStatus.isEmpty ? "播放音乐后显示歌曲、封面和进度" : musicStatus).font(.system(size: 11)).foregroundStyle(.secondary)
                 HStack { Button("重新读取 / 请求授权") { IslandController.shared.promptMusicAuth() }; Button("自动化设置") { openPrivacy("Automation") } }
                 Divider()
-                Toggle("显示实时歌词", isOn: Binding(get: { lyricsPlacement != .hidden }, set: { value in lyricsPlacement = value ? .below : .hidden; IslandPreferences.shared.lyricsPlacement = lyricsPlacement }))
-                Picker("歌词位置", selection: $lyricsPlacement) { ForEach(LyricsPlacement.allCases, id: \.rawValue) { Text($0.title).tag($0) } }.pickerStyle(.segmented).onChange(of: lyricsPlacement) { _, value in IslandPreferences.shared.lyricsPlacement = value }
+                Picker("收起时的歌词", selection: $lyricsPlacement) {
+                    Text("隐藏").tag(LyricsPlacement.hidden)
+                    Text("刘海下方").tag(LyricsPlacement.below)
+                    Text("刘海左侧").tag(LyricsPlacement.side)
+                }.pickerStyle(.segmented).onChange(of: lyricsPlacement) { _, value in IslandPreferences.shared.lyricsPlacement = value }
+                Picker("展开时的歌词", selection: $expandedLyricsPlacement) {
+                    Text("隐藏").tag(LyricsPlacement.hidden)
+                    Text("控制键下方").tag(LyricsPlacement.below)
+                    Text("播放器右侧").tag(LyricsPlacement.side)
+                }.pickerStyle(.segmented).onChange(of: expandedLyricsPlacement) { _, value in IslandPreferences.shared.expandedLyricsPlacement = value }
                 Picker("歌词动画", selection: $lyricsAnimation) { ForEach(LyricsAnimationStyle.allCases, id: \.rawValue) { Text($0.title).tag($0) } }.onChange(of: lyricsAnimation) { _, value in IslandPreferences.shared.lyricsAnimation = value }
                 HStack { Text(lyricsDirectory).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1); Spacer(); Button("选择歌词目录…") { chooseLyricsDirectory() } }
-                Text("使用本地 .lrc 文件，按“歌曲名.lrc”或“歌曲名 - 歌手.lrc”匹配。无歌词时自动隐藏；不上传歌曲或歌词。Apple Music 风格更顺滑，省资源模式每秒刷新约 4 次。").font(.system(size: 11)).foregroundStyle(.secondary)
-                Text("Music 和 Spotify 支持封面及进度控制；歌词需要本地 LRC 时间轴。").font(.system(size: 11)).foregroundStyle(.secondary)
+                Toggle("自动查找在线歌词", isOn: $onlineLyrics).onChange(of: onlineLyrics) { _, value in IslandPreferences.shared.onlineLyrics = value }
+                Text("优先使用本地 LRC。在线查找会将曲名、歌手、专辑和时长提交给 LRCLIB；未匹配时，通过网易云音乐检索曲名和歌手。").font(.system(size: 11)).foregroundStyle(.secondary)
             }
-            card("专注模式") {
-                Toggle("专注计时显示在灵动岛", isOn: $focusDisplay).onChange(of: focusDisplay) { _, value in IslandPreferences.shared.focusDisplayEnabled = value }
-                Text("专注模块使用 Apple Intelligence 减少打扰风格的蓝紫渐变图标。macOS 没有公开接口读取系统“减少打扰”状态，因此只显示灵动岛自己的专注计时，不伪造系统状态。").font(.system(size: 11)).foregroundStyle(.secondary)
+            card("计时") {
+                Toggle("收起时显示倒计时", isOn: $focusDisplay).onChange(of: focusDisplay) { _, value in IslandPreferences.shared.focusDisplayEnabled = value }
             }
             card("系统提示") {
                 Toggle("接管音量与亮度按键", isOn: $takeover).onChange(of: takeover) { _, enabled in

@@ -57,8 +57,8 @@ final class ActivityTests: XCTestCase {
         XCTAssertEqual(policy.surface, .panel(.timer))
     }
     func testTabSwitchingWrapsBothWays() {
-        XCTAssertEqual(IslandTab.music.moved(by: -1), .clipboard)
-        XCTAssertEqual(IslandTab.clipboard.moved(by: 1), .music)
+        XCTAssertEqual(IslandTab.music.moved(by: -1), .focus)
+        XCTAssertEqual(IslandTab.focus.moved(by: 1), .music)
         XCTAssertEqual(IslandTab.timer.moved(by: 1), .audio)
     }
     func testPlayingSpotifyWinsOverPausedMusic() {

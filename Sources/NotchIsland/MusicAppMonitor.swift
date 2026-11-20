@@ -108,7 +108,6 @@ final class MusicAppMonitor {
         var info = MediaInfo(title: title, artist: result.atIndex(2)?.stringValue ?? "", isPlaying: result.atIndex(6)?.stringValue?.lowercased() == "playing",
                              album: result.atIndex(3)?.stringValue ?? "", duration: app == "Spotify" ? duration / 1000 : duration,
                              elapsed: result.atIndex(5)?.doubleValue ?? 0, source: app)
-        info.lyrics = LyricsStore.load(title: title, artist: info.artist)
         let key = "\(app)|\(info.title)|\(info.artist)|\(info.album)"
         info.trackID = key
         if let cached = artworkCache[key] { info.artwork = cached }

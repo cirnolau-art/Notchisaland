@@ -17,7 +17,11 @@ struct MediaInfo {
     var progress: Double { duration > 0 ? min(1, max(0, elapsed / duration)) : 0 }
     func interpolated(at date: Date = Date()) -> MediaInfo {
         var result = self
-        if isPlaying { result.elapsed = min(max(duration, elapsed), elapsed + max(0, date.timeIntervalSince(sampledAt))) }
+        if isPlaying {
+            let position = elapsed + max(0, date.timeIntervalSince(sampledAt))
+            result.elapsed = duration > 0 ? min(duration, position) : position
+            result.sampledAt = max(date, sampledAt)
+        }
         return result
     }
 }
@@ -42,12 +46,50 @@ private final class PassiveLabel: NSTextField { override func hitTest(_ point: N
 private final class PassiveImage: NSImageView { override func hitTest(_ point: NSPoint) -> NSView? { nil } }
 
 private final class FocusBadgeView: NSView {
-    override func draw(_ dirtyRect: NSRect) {
-        let colors = [NSColor.systemBlue.cgColor, NSColor.systemPurple.cgColor, NSColor.systemPink.cgColor] as CFArray
-        guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 0.55, 1]) else { return }
-        let context = NSGraphicsContext.current?.cgContext; context?.drawLinearGradient(gradient, start: CGPoint(x: 0, y: 0), end: CGPoint(x: bounds.width, y: bounds.height), options: [])
-        let symbol = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "专注")?.withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
-        symbol?.draw(in: bounds.insetBy(dx: 2, dy: 2), from: .zero, operation: .sourceOver, fraction: 1)
+    private let light = CAGradientLayer()
+    private let ring = CAShapeLayer()
+    private let icon = PassiveImage()
+    private var mode: SystemFocusMode?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        light.type = .conic
+        light.startPoint = CGPoint(x: 0.5, y: 0.5); light.endPoint = CGPoint(x: 0.5, y: 1)
+        light.colors = [NSColor.systemCyan, .systemBlue, .systemPurple, .systemPink, .systemOrange, .systemCyan].map(\.cgColor)
+        ring.fillColor = nil; ring.strokeColor = NSColor.white.cgColor
+        light.mask = ring; layer?.addSublayer(light)
+        icon.imageScaling = .scaleProportionallyDown; addSubview(icon)
+        setAccessibilityElement(true); setAccessibilityRole(.image)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func layout() {
+        super.layout()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        light.frame = bounds; ring.frame = bounds
+        ring.lineWidth = max(1.5, bounds.width * 0.075)
+        ring.path = CGPath(ellipseIn: bounds.insetBy(dx: ring.lineWidth / 2, dy: ring.lineWidth / 2), transform: nil)
+        CATransaction.commit()
+        let inset = bounds.width * (mode?.reducesInterruptions == true ? 0.20 : 0.08)
+        icon.frame = bounds.insetBy(dx: inset, dy: inset)
+    }
+    func update(_ next: SystemFocusMode?, animated: Bool) {
+        if mode != next {
+            mode = next; isHidden = next == nil
+            toolTip = next?.name; setAccessibilityLabel(next?.name)
+            let symbol = next.flatMap { NSImage(systemSymbolName: $0.symbol, accessibilityDescription: nil) } ?? NSImage(systemSymbolName: "moon.fill", accessibilityDescription: nil)
+            icon.image = symbol?.withSymbolConfiguration(.init(pointSize: bounds.width, weight: .medium))
+            icon.contentTintColor = next?.reducesInterruptions == true ? .white : .systemIndigo.blended(withFraction: 0.42, of: .white)
+            light.isHidden = next?.reducesInterruptions != true
+            needsLayout = true
+        }
+        if animated, next?.reducesInterruptions == true, !IslandPreferences.shared.reduceMotion {
+            if light.animation(forKey: "orbit") == nil {
+                let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+                spin.fromValue = 0; spin.toValue = Double.pi * 2; spin.duration = 6; spin.repeatCount = .infinity
+                light.add(spin, forKey: "orbit")
+            }
+        } else { light.removeAnimation(forKey: "orbit") }
     }
 }
 
@@ -258,6 +300,14 @@ final class IslandView: NSView {
     private var hudInteracting = false
     private var equalizer: EqualizerView?
     private var compactArtwork: NSImageView?
+    private var compactFocusBadge: FocusBadgeView?
+    private weak var panelFocusBadge: FocusBadgeView?
+    private(set) var focusState = SystemFocusState.unavailable
+    private var compactTimer: TimerSession? { IslandPreferences.shared.focusDisplayEnabled ? timerSession : nil }
+    private var compactFocus: SystemFocusMode? {
+        guard case .idle = state else { return nil }
+        return focusState.mode
+    }
     private var bodyFadeWork: DispatchWorkItem?
     private var transitionWork: DispatchWorkItem?
     private var outgoingBody: NSImageView?
@@ -265,9 +315,19 @@ final class IslandView: NSView {
     private var accessoryStyle = ""
     private var accessoryVisible: Bool?
     private var compactLyricsLabel: PassiveLabel?
+    private var lyricTimer: Timer?
     private var lyricCurrentLabel: NSTextField?
     private var lyricNextLabel: NSTextField?
-    private var lyricLineKey = ""
+
+    private var musicPanelWidth: CGFloat { max(360, notchWidth + 100) }
+    private var expandedLyricPosition: LyricsPlacement {
+        guard let mediaInfo, !mediaInfo.lyrics.isEmpty else { return .hidden }
+        let placement = IslandPreferences.shared.expandedLyricsPlacement
+        if placement == .side, let screen = IslandPreferences.shared.screen, screen.frame.width < musicPanelWidth + 240 {
+            return .below
+        }
+        return placement
+    }
 
     var mediaInfo: MediaInfo?
     var timerSession: TimerSession?
@@ -330,6 +390,12 @@ final class IslandView: NSView {
     override var acceptsFirstResponder: Bool { true }
     private var top: CGFloat { bounds.maxY }
     var debugVisibleRect: CGRect { visualRect }
+    var onFootprintChange: (() -> Void)?
+    var occupiedScreenFrame: CGRect? {
+        guard let window else { return nil }
+        let moving = shape.presentation()?.path?.boundingBoxOfPath ?? visualRect
+        return window.convertToScreen(convert(visualRect.union(moving).union(notchRect), to: nil))
+    }
     var debugNotchRect: CGRect { notchRect }
     var debugWaveAnimating: Bool { equalizer?.isAnimating ?? false }
     var debugWaveIsFlat: Bool { equalizer?.isFlat ?? false }
@@ -411,26 +477,30 @@ final class IslandView: NSView {
         }
         visualRect = rect
         updateBackdrop(rect: rect, previous: previous, spring: motion)
+        onFootprintChange?()
     }
     func render(_ newState: IslandState, animated: Bool = true) {
         let previousTab = tab
         let previousExpanded = expanded
         state = newState
         var height = notchHeight
-        var width = notchWidth + ((compactMediaVisible || timerSession != nil) ? 112 : 0)
+        var width = notchWidth + ((compactMediaVisible || compactTimer != nil || compactFocus != nil) ? 112 : 0)
         var key = "idle"
         expanded = false; preview = false
         switch newState {
         case .workspace(let selected, let isPreview):
             tab = selected; preview = isPreview; expanded = true
             let secondary = selected == .audio || selected == .calendar || selected == .shortcuts || selected == .clipboard
-            let lyricExtra: CGFloat = selected == .music && !isPreview && IslandPreferences.shared.lyricsPlacement != .hidden && !(mediaInfo?.lyrics.isEmpty ?? true) ? 62 : 0
-            height += isPreview ? 86 : (selected == .music ? 242 + lyricExtra : (secondary ? 326 : bodyHeight)); width = isPreview ? max(notchWidth + 90, 324) : (selected == .music ? max(360, notchWidth + 100) : panelWidth)
-            key = "panel-\(tab.rawValue)-\(isPreview)-\(visibleTabs.map(\.rawValue))-lyrics\(lyricExtra)"
+            let position: LyricsPlacement = selected == .music && !isPreview ? expandedLyricPosition : .hidden
+            height += isPreview ? 86 : (selected == .music ? 242 + (position == .below ? 62 : 0) : (secondary ? 326 : bodyHeight))
+            width = isPreview ? max(notchWidth + 90, 324) : (selected == .music ? musicPanelWidth + (position == .side ? 224 : 0) : panelWidth)
+            key = "panel-\(tab.rawValue)-\(isPreview)-\(visibleTabs.map(\.rawValue))-lyrics\(position.rawValue)"
         case .music(let info):
             mediaInfo = info; tab = .music; expanded = true
-            let lyricExtra: CGFloat = IslandPreferences.shared.lyricsPlacement != .hidden && !info.lyrics.isEmpty ? 62 : 0
-            height += 242 + lyricExtra; width = max(360, notchWidth + 100); key = "panel-0-false-\(visibleTabs.map(\.rawValue))-lyrics\(lyricExtra)"
+            let position = expandedLyricPosition
+            height += 242 + (position == .below ? 62 : 0)
+            width = musicPanelWidth + (position == .side ? 224 : 0)
+            key = "panel-0-false-\(visibleTabs.map(\.rawValue))-lyrics\(position.rawValue)"
         case .volume: width = notchWidth + 236; key = "volume"
         case .brightness: width = notchWidth + 236; key = "brightness"
         case .airPods(let info): height += 226; width = max(notchWidth + 140, 390); key = "airpods-\(info.address)-\(info.connected)"
@@ -487,7 +557,7 @@ final class IslandView: NSView {
             if h > 0 { body.subviews.forEach { $0.removeFromSuperview() } }
             airPodsCard = nil
             audioPanel = nil; calendarPanel = nil; quickPanel = nil; clipboardPanel = nil
-            titleLabel = nil; artistLabel = nil; elapsedLabel = nil; remainingLabel = nil; timerLabel = nil; timerStatus = nil; playButton = nil; seekSlider = nil; artworkView = nil; pauseButton = nil; minutesField = nil; lyricCurrentLabel = nil; lyricNextLabel = nil; lyricLineKey = ""
+            titleLabel = nil; artistLabel = nil; elapsedLabel = nil; remainingLabel = nil; timerLabel = nil; timerStatus = nil; playButton = nil; seekSlider = nil; artworkView = nil; pauseButton = nil; minutesField = nil; lyricCurrentLabel = nil; lyricNextLabel = nil
             if expanded { preview ? buildPreview() : buildPanel() }
             else { buildTransient(newState) }
             if h > 0 && animated && !body.isHidden && !IslandPreferences.shared.reduceMotion {
@@ -525,6 +595,7 @@ final class IslandView: NSView {
         }
         switch tab {
         case .music: buildMusic(); case .files: buildFiles(); case .timer: buildTimer()
+        case .focus: buildFocus()
         case .audio:
             let panel = AudioPanelView(frame: NSRect(x: 0, y: 42, width: w, height: 284))
             panel.onSelect = { [weak self] in self?.onSelectOutput?($0) }
@@ -554,7 +625,8 @@ final class IslandView: NSView {
     func refreshClipboard() { clipboardPanel?.update() }
     func refreshMeetingCountdown() { calendarPanel?.refreshTime() }
     private func buildMusic() {
-        let w = body.bounds.width
+        let position = expandedLyricPosition
+        let w = position == .side ? musicPanelWidth : body.bounds.width
         let art = PassiveImage(frame: NSRect(x: 24, y: 54, width: 60, height: 60))
         art.wantsLayer = true; art.layer?.cornerRadius = 9; art.layer?.masksToBounds = true
         art.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.07).cgColor; art.imageScaling = .scaleProportionallyUpOrDown
@@ -573,11 +645,23 @@ final class IslandView: NSView {
         playButton = button(symbol: "play.fill", help: "播放或暂停", frame: NSRect(x: w / 2 - 26, y: 180, width: 52, height: 52)) { [weak self] _ in self?.onPlayPause?() }
         playButton?.symbolSize = 28
         button(symbol: "forward.fill", help: "下一首", frame: NSRect(x: w / 2 + 44, y: 185, width: 44, height: 42)) { [weak self] _ in self?.onNext?() }.symbolSize = 22
-        if IslandPreferences.shared.lyricsPlacement != .hidden, !(mediaInfo?.lyrics.isEmpty ?? true) {
-            let current = label("", frame: NSRect(x: 28, y: 232, width: w - 56, height: 24), size: 15, weight: .semibold)
-            current.alignment = .center; current.lineBreakMode = .byTruncatingTail; lyricCurrentLabel = current
-            let next = label("", frame: NSRect(x: 28, y: 257, width: w - 56, height: 20), size: 11, color: .white.withAlphaComponent(0.44))
-            next.alignment = .center; next.lineBreakMode = .byTruncatingTail; lyricNextLabel = next
+        if position != .hidden {
+            let side = position == .side
+            let x = side ? w + 4 : 28
+            let lineWidth = side ? body.bounds.width - x - 24 : w - 56
+            let current = label("", frame: NSRect(x: x, y: side ? 79 : 235, width: lineWidth, height: side ? 58 : 26), size: side ? 18 : 16, weight: .semibold)
+            let next = label("", frame: NSRect(x: x, y: side ? 145 : 264, width: lineWidth, height: side ? 44 : 20), size: side ? 13 : 12, color: .white.withAlphaComponent(0.5))
+            for field in [current, next] {
+                field.alignment = side ? .natural : .center
+                field.wantsLayer = true
+                if side {
+                    field.cell?.wraps = true
+                    field.lineBreakMode = .byWordWrapping
+                    field.maximumNumberOfLines = 2
+                }
+            }
+            lyricCurrentLabel = current
+            lyricNextLabel = next
         }
     }
     @objc private func seekChanged(_ sender: NSSlider) {
@@ -601,11 +685,31 @@ final class IslandView: NSView {
             scroll.documentView = list; body.addSubview(scroll)
         }
     }
+    private func buildFocus() {
+        let mid = body.bounds.midX
+        let badge = FocusBadgeView(frame: NSRect(x: mid - 23, y: 66, width: 46, height: 46))
+        body.addSubview(badge); panelFocusBadge = badge
+        badge.update(focusState.mode ?? .resolve(identifier: "", name: "专注模式", symbol: "moon"), animated: activityVisible)
+        let title = label(focusState.title, frame: NSRect(x: 24, y: 127, width: body.bounds.width - 48, height: 28), size: 20, weight: .semibold)
+        title.alignment = .center
+        let waiting = focusState == .unavailable || focusState.mode == .resolve(identifier: "")
+        let detail: String
+        if waiting { detail = "无法读取当前模式名称" }
+        else { detail = focusState.mode == nil ? "系统当前未开启专注模式" : "系统专注模式已开启" }
+        label(detail, frame: NSRect(x: 16, y: 169, width: body.bounds.width - 32, height: 20), size: 12, color: .white.withAlphaComponent(0.58)).alignment = .center
+        let command = "专注模式设置"
+        button(command, symbol: "arrow.up.forward", help: command, frame: NSRect(x: mid - 78, y: 211, width: 156, height: 34)) { _ in
+            if let url = URL(string: "x-apple.systempreferences:com.apple.Focus-Settings.extension") { NSWorkspace.shared.open(url) }
+        }
+    }
+    func updateFocus(_ next: SystemFocusState) {
+        guard next != focusState else { return }
+        focusState = next
+        if expanded && tab == .focus { contentKey = "" }
+        render(state)
+    }
     private func buildTimer() {
         if let session = timerSession {
-            if IslandPreferences.shared.focusDisplayEnabled {
-                let badge = FocusBadgeView(frame: NSRect(x: 202, y: 43, width: 36, height: 24)); badge.wantsLayer = true; badge.layer?.cornerRadius = 12; badge.layer?.masksToBounds = true; body.addSubview(badge)
-            }
             timerLabel = label(formatTime(session.remaining()), frame: NSRect(x: 24, y: 72, width: 392, height: 68), size: 52, weight: .light)
             timerLabel?.font = .monospacedDigitSystemFont(ofSize: 52, weight: .light); timerLabel?.alignment = .center
             timerStatus = label(session.label, frame: NSRect(x: 24, y: 145, width: 392, height: 20), size: 12, color: .white.withAlphaComponent(0.5)); timerStatus?.alignment = .center
@@ -629,6 +733,7 @@ final class IslandView: NSView {
     private func buildPreview() {
         let title: String
         if tab == .timer, let session = timerSession { title = "\(session.label) · \(formatTime(session.remaining()))" }
+        else if tab == .focus { title = focusState.title }
         else if tab == .music, let info = mediaInfo, !info.title.isEmpty { title = info.title }
         else { title = visibleTabs.isEmpty ? "只留一片安静" : tab.title }
         label(title, frame: NSRect(x: 22, y: 18, width: body.bounds.width - 72, height: 24), size: 15, weight: .semibold)
@@ -670,18 +775,20 @@ final class IslandView: NSView {
         label(subtitle, frame: NSRect(x: 66, y: 42, width: body.bounds.width - 88, height: 18), size: 11, color: .white.withAlphaComponent(0.5))
     }
     private func renderAccessories(_ state: IslandState) {
-        updateCompactLyrics()
+        refreshLyrics()
         let style: String
         switch state { case .volume: style = "volume"; case .brightness: style = "brightness"; default: style = "compact" }
         if accessoryStyle != style {
             accessoryStyle = style
             accessoryVisible = nil; accessoryKey = ""
             leftAccessory.subviews.forEach { $0.removeFromSuperview() }; rightAccessory.subviews.forEach { $0.removeFromSuperview() }
-            hudLabel = nil; hudSlider = nil; equalizer = nil; compactArtwork = nil
+            hudLabel = nil; hudSlider = nil; equalizer = nil; compactArtwork = nil; compactFocusBadge = nil
             if style == "compact" {
                 let side: CGFloat = min(22, notchHeight - 10)
                 let art = PassiveImage(frame: NSRect(x: (56 - side) / 2, y: (notchHeight - side) / 2, width: side, height: side))
                 art.wantsLayer = true; art.layer?.cornerRadius = 5; art.layer?.masksToBounds = true; compactArtwork = art; leftAccessory.addSubview(art)
+                let badge = FocusBadgeView(frame: art.frame)
+                badge.isHidden = true; compactFocusBadge = badge; leftAccessory.addSubview(badge)
                 let wave = EqualizerView(frame: NSRect(x: 16, y: (notchHeight - 14) / 2, width: 24, height: 14))
                 equalizer = wave; rightAccessory.addSubview(wave)
             } else {
@@ -702,22 +809,36 @@ final class IslandView: NSView {
             if !hudInteracting { hudSlider?.setDisplayedValue(value, animated: true) }
             return
         }
-        let show = compactMediaVisible || timerSession != nil
+        let show = compactMediaVisible || compactTimer != nil || compactFocus != nil
         setAccessoryVisibility(show)
         leftAccessory.frame = CGRect(x: notchRect.minX - 56, y: notchRect.minY, width: 56, height: notchHeight)
         rightAccessory.frame = CGRect(x: notchRect.maxX, y: notchRect.minY, width: 56, height: notchHeight)
-        if let art = mediaInfo?.artwork { compactArtwork?.image = NSImage(cgImage: art, size: .zero) }
-        else { compactArtwork?.image = NSImage(systemSymbolName: timerSession != nil ? "timer" : "music.note", accessibilityDescription: nil); compactArtwork?.contentTintColor = .white.withAlphaComponent(0.7) }
-        equalizer?.isHidden = timerSession != nil
-        equalizer?.setPlaying(activityVisible && timerSession == nil && show && mediaInfo?.isPlaying == true, color: mediaInfo?.dominantColor.map { NSColor(cgColor: $0) ?? .white } ?? .white)
-        if let session = timerSession {
+        let pairedIcons = compactFocus != nil && compactMediaVisible
+        let side = min(22, notchHeight - 10)
+        compactArtwork?.isHidden = compactFocus != nil && !compactMediaVisible
+        compactArtwork?.frame.origin.x = pairedIcons ? 4 : (56 - side) / 2
+        compactFocusBadge?.frame.origin.x = pairedIcons ? 30 : (56 - side) / 2
+        compactFocusBadge?.update(compactFocus, animated: activityVisible)
+        if expanded && tab == .focus, let mode = focusState.mode { panelFocusBadge?.update(mode, animated: activityVisible) }
+        if compactMediaVisible, let art = mediaInfo?.artwork { compactArtwork?.image = NSImage(cgImage: art, size: .zero) }
+        else { compactArtwork?.image = NSImage(systemSymbolName: compactTimer != nil ? "timer" : "music.note", accessibilityDescription: nil); compactArtwork?.contentTintColor = .white.withAlphaComponent(0.7) }
+        equalizer?.isHidden = compactTimer != nil || !compactMediaVisible
+        equalizer?.setPlaying(activityVisible && compactTimer == nil && compactMediaVisible && mediaInfo?.isPlaying == true, color: mediaInfo?.dominantColor.map { NSColor(cgColor: $0) ?? .white } ?? .white)
+        if let session = compactTimer {
             let key = "timer-\(Int(session.remaining().rounded(.up)))"
             if key != accessoryKey {
                 rightAccessory.subviews.filter { $0 !== equalizer }.forEach { $0.removeFromSuperview() }
                 let field = label(formatTime(session.remaining()), frame: NSRect(x: 0, y: (notchHeight - 16) / 2, width: 56, height: 17), size: 11, parent: rightAccessory)
                 field.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium); field.alignment = .center; accessoryKey = key
             }
-        } else if accessoryKey.hasPrefix("timer-") { rightAccessory.subviews.filter { $0 !== equalizer }.forEach { $0.removeFromSuperview() }; accessoryKey = "" }
+        } else if let focus = compactFocus, !compactMediaVisible {
+            let key = "focus-" + focus.name
+            if accessoryKey != key {
+                rightAccessory.subviews.filter { $0 !== equalizer }.forEach { $0.removeFromSuperview() }
+                let field = label(focus.name, frame: NSRect(x: 0, y: (notchHeight - 15) / 2, width: 50, height: 16), size: 10, weight: .medium, parent: rightAccessory)
+                field.alignment = .center; field.toolTip = focus.name; accessoryKey = key
+            }
+        } else if !accessoryKey.isEmpty { rightAccessory.subviews.filter { $0 !== equalizer }.forEach { $0.removeFromSuperview() }; accessoryKey = "" }
         if !hasNotch { centerLabel.stringValue = "" }
     }
     private func setAccessoryVisibility(_ visible: Bool) {
@@ -759,7 +880,6 @@ final class IslandView: NSView {
             playButton?.isEnabled = info != nil
             seekSlider?.isEnabled = (info?.duration ?? 0) > 0 && info?.source.isEmpty == false
             if !seekInProgress { seekSlider?.doubleValue = info?.progress ?? 0; elapsedLabel?.stringValue = formatTrackTime(info?.elapsed ?? 0); remainingLabel?.stringValue = "−" + formatTrackTime(max(0, (info?.duration ?? 0) - (info?.elapsed ?? 0))) }
-            updateExpandedLyrics(info)
         }
         if let session = timerSession {
             timerLabel?.stringValue = formatTime(session.remaining())
@@ -768,42 +888,65 @@ final class IslandView: NSView {
             pauseButton?.image = NSImage(systemSymbolName: session.isPaused ? "play.fill" : "pause.fill", accessibilityDescription: nil)
         }
     }
-    private func updateExpandedLyrics(_ info: MediaInfo?) {
-        guard let info, !info.lyrics.isEmpty, let lyricCurrentLabel else { return }
+    private func refreshLyrics() {
+        let compact: Bool
+        if case .idle = state {
+            compact = compactMediaVisible && IslandPreferences.shared.lyricsPlacement != .hidden
+        } else { compact = false }
+        let inPlayer = expanded && !preview && tab == .music && expandedLyricPosition != .hidden
+        if !compact { compactLyricsLabel?.isHidden = true }
+        guard activityVisible, compact || inPlayer, let info = mediaInfo, !info.lyrics.isEmpty else {
+            compactLyricsLabel?.isHidden = true
+            lyricTimer?.invalidate(); lyricTimer = nil
+            return
+        }
         let pair = info.lyricLine()
-        let current = pair.current?.text ?? ""
-        let next = pair.next?.text ?? ""
-        let key = "\(current)|\(next)"
-        if lyricLineKey != key {
-            lyricLineKey = key
-            if IslandPreferences.shared.lyricsAnimation == .appleMusic && !IslandPreferences.shared.reduceMotion {
-                let transition = CATransition(); transition.type = .fade; transition.timingFunction = CAMediaTimingFunction(name: .easeOut); transition.duration = 0.24
-                lyricCurrentLabel.layer?.add(transition, forKey: "lyricFade")
-            }
+        if compact { updateCompactLyrics(pair.current?.text) }
+        if inPlayer {
+            setLyricText(pair.current?.text ?? "", on: lyricCurrentLabel)
+            setLyricText(pair.next?.text ?? "", on: lyricNextLabel)
         }
-        lyricCurrentLabel.stringValue = current.isEmpty ? "等待歌词" : current
-        lyricNextLabel?.stringValue = next
+        guard info.isPlaying, let next = pair.next, next.time.isFinite,
+              info.duration <= 0 || next.time <= info.duration else {
+            lyricTimer?.invalidate(); lyricTimer = nil
+            return
+        }
+        let deadline = info.sampledAt.addingTimeInterval(next.time - info.elapsed)
+        if let timer = lyricTimer, timer.isValid, abs(timer.fireDate.timeIntervalSince(deadline)) < 0.015 { return }
+        lyricTimer?.invalidate()
+        let timer = Timer(fire: max(deadline, Date().addingTimeInterval(0.005)), interval: 0, repeats: false) { [weak self] _ in
+            self?.lyricTimer = nil
+            self?.refreshLyrics()
+        }
+        timer.tolerance = 0.02
+        lyricTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
-    private func updateCompactLyrics() {
-        let placement = IslandPreferences.shared.lyricsPlacement
-        guard !expanded, placement != .hidden, IslandPreferences.shared.isEnabled(.music), let info = mediaInfo,
-              let current = info.lyricLine().current ?? info.lyricLine().next else {
-            compactLyricsLabel?.isHidden = true; return
+    private func setLyricText(_ text: String, on field: NSTextField?) {
+        guard let field, field.stringValue != text else { return }
+        field.stringValue = text
+        if IslandPreferences.shared.lyricsAnimation == .appleMusic && !IslandPreferences.shared.reduceMotion {
+            let fade = CATransition()
+            fade.type = .fade; fade.duration = 0.22
+            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            field.layer?.add(fade, forKey: "lyricFade")
         }
+    }
+    private func updateCompactLyrics(_ text: String?) {
+        guard let text else { compactLyricsLabel?.isHidden = true; return }
         if compactLyricsLabel == nil {
             let field = PassiveLabel(labelWithString: ""); field.alignment = .center; field.font = .systemFont(ofSize: 11, weight: .medium); field.textColor = .white.withAlphaComponent(0.9); field.lineBreakMode = .byTruncatingTail; field.wantsLayer = true; field.layer?.cornerRadius = 8; field.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.78).cgColor; field.layer?.borderWidth = 0.5; field.layer?.borderColor = NSColor.white.withAlphaComponent(0.1).cgColor; addSubview(field); compactLyricsLabel = field
         }
         guard let field = compactLyricsLabel else { return }
         field.isHidden = false
-        if placement == .below { field.frame = NSRect(x: bounds.midX - 180, y: top - notchHeight - 25, width: 360, height: 20) }
-        else { field.frame = NSRect(x: notchRect.minX - 224, y: top - notchHeight - 1, width: 214, height: 20); field.alignment = .right }
-        let text = current.text
-        if field.stringValue != text {
-            if IslandPreferences.shared.lyricsAnimation == .appleMusic && !IslandPreferences.shared.reduceMotion {
-                let transition = CATransition(); transition.type = .fade; transition.duration = 0.22; field.layer?.add(transition, forKey: "compactLyricFade")
-            }
-            field.stringValue = text
+        if IslandPreferences.shared.lyricsPlacement == .below {
+            field.frame = NSRect(x: bounds.midX - 180, y: notchRect.minY - 25, width: 360, height: 20)
+        } else {
+            let rightEdge = visualRect.minX - 5
+            let width = min(214, max(0, rightEdge - bounds.minX - 2))
+            field.frame = NSRect(x: rightEdge - width, y: notchRect.midY - 10, width: width, height: 20)
         }
+        setLyricText(text, on: field)
     }
     func refreshCompact() { render(state) }
     func refreshFiles() { guard expanded && tab == .files && !preview else { return }; contentKey = ""; render(state, animated: false) }
@@ -815,7 +958,6 @@ final class IslandView: NSView {
         }
         if !expanded { renderAccessories(state) }
     }
-    func updateMusicProgress(_ info: MediaInfo) { mediaInfo = info; refreshContent() }
     func setHover(_ value: Bool) {
         guard hover != value else { return }; hover = value
         CATransaction.begin(); CATransaction.setAnimationDuration(0.18)

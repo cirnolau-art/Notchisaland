@@ -12,9 +12,10 @@ final class NotificationBridge {
     private var workspaceObservers: [NSObjectProtocol] = []
     private var retry: Timer?
     private var scanWork: DispatchWorkItem?
+    private var rescanRequested = false
     private var enabled = false
     private var generation = 0
-    private var deduplication = NotificationDeduplicator() // utility queue only
+    private var deduplication = NotificationDeduplicator()
     private var transferred = 0
     var isActive: Bool { observer != nil }
 
@@ -40,7 +41,7 @@ final class NotificationBridge {
     }
     func reconnect() { guard enabled else { return }; removeObserver(); installIfPossible() }
     private func removeObserver() {
-        generation += 1; scanWork?.cancel(); scanWork = nil
+        generation += 1; scanWork?.cancel(); scanWork = nil; rescanRequested = false
         if let observer { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes) }
         observer = nil; application = nil; observedPID = 0
     }
@@ -73,11 +74,24 @@ final class NotificationBridge {
         guard enabled, let application, observer != nil else { return }
         if CommandLine.arguments.contains("--diagnose-notifications") { print("[Notifications] scan requested") }
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier != observedPID else { return }
-        scanWork?.cancel()
+        // Keep the first scheduled scan even during a stream of AX layout events.
+        // Coalesce changes that arrive while it waits or reads into one trailing scan.
+        if scanWork != nil { rescanRequested = true; return }
         let expected = generation
         let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
         let screens = NSScreen.screens.map { CGRect(x: $0.frame.minX, y: primaryTop - $0.frame.maxY, width: $0.frame.width, height: $0.frame.height) }
-        let work = DispatchWorkItem { [weak self] in self?.scan(application, generation: expected, screens: screens) }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.scan(application, generation: expected, screens: screens)
+            DispatchQueue.main.async {
+                guard self.generation == expected else { return }
+                self.scanWork = nil
+                if self.rescanRequested {
+                    self.rescanRequested = false
+                    self.scheduleScan()
+                }
+            }
+        }
         scanWork = work; queue.asyncAfter(deadline: .now() + 0.08, execute: work)
     }
     private static func value(_ element: AXUIElement, _ key: String) -> CFTypeRef? {
@@ -136,13 +150,11 @@ final class NotificationBridge {
                 } else { payload = close == nil ? nil : BannerTextParser.parse(labels) }
                 if let payload {
                     let identity = identifier.isEmpty ? "\(CFHash(element))|\(payload.source)|\(payload.title)|\(payload.body)" : identifier
-                    if deduplication.accept(identity) {
-                        var item = IslandNotification(source: payload.source, title: payload.title, body: payload.body, identity: identity)
-                        if let dismissAction {
-                            item.dismissNativeBanner = { [weak self] in self?.dismiss(element, action: dismissAction, generation: expected) }
-                        } else if let close { item.dismissNativeBanner = { [weak self] in self?.dismiss(close, action: kAXPressAction, generation: expected) } }
-                        deliveries.append(item)
-                    }
+                    var item = IslandNotification(source: payload.source, title: payload.title, body: payload.body, identity: identity)
+                    if let dismissAction {
+                        item.dismissNativeBanner = { [weak self] in self?.dismiss(element, action: dismissAction, generation: expected) }
+                    } else if let close { item.dismissNativeBanner = { [weak self] in self?.dismiss(close, action: kAXPressAction, generation: expected) } }
+                    deliveries.append(item)
                     return
                 }
             }
@@ -165,7 +177,7 @@ final class NotificationBridge {
         guard !deliveries.isEmpty else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self, self.enabled, expected == self.generation else { return }
-            for var item in deliveries {
+            for var item in deliveries where self.deduplication.accept(item.identity) {
                 let source = NSWorkspace.shared.runningApplications.first { $0.localizedName?.localizedCaseInsensitiveCompare(item.source) == .orderedSame }
                 item.icon = source?.icon
                 if let source { item.openApplication = { source.activate(options: []) } }

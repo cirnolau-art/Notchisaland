@@ -121,7 +121,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showAirPods() { IslandController.shared.showAirPods() }
     @objc private func showFiles() { IslandController.shared.showPanel(.files) }
-    @objc private func showFocus() { IslandController.shared.showPanel(.timer) }
     @objc private func showModule(_ sender: NSMenuItem) { if let raw = sender.representedObject as? Int, let tab = IslandTab(rawValue: raw) { IslandController.shared.showPanel(tab) } }
     @objc private func stopRinging() { IslandController.shared.alarmManager.stopRinging() }
 
