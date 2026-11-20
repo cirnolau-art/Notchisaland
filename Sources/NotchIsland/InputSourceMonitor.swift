@@ -4,35 +4,46 @@ import Carbon.HIToolbox
 /// 输入法切换监听：kTISNotifySelectedKeyboardInputSourceChanged + TIS 当前输入源查询。
 final class InputSourceMonitor {
     var onInputSourceChange: ((String) -> Void)?
+    private let readSource: () -> (String, String)?
 
     private var selfPtr: UnsafeMutableRawPointer { Unmanaged.passUnretained(self).toOpaque() }
     private var debounceWork: DispatchWorkItem?
+    private var appKitObserver: NSObjectProtocol?
     private var currentSourceID: String = ""
 
     private var enabled = false
+    init(readSource: @escaping () -> (String, String)? = InputSourceMonitor.currentKeyboardSource) {
+        self.readSource = readSource
+    }
     func setEnabled(_ value: Bool) { if value { start() } else { stop() } }
     func stop() {
         guard enabled else { return }; enabled = false; debounceWork?.cancel(); debounceWork = nil
-        CFNotificationCenterRemoveEveryObserver(CFNotificationCenterGetLocalCenter(), selfPtr)
+        removeObservers()
     }
-    deinit { CFNotificationCenterRemoveEveryObserver(CFNotificationCenterGetLocalCenter(), selfPtr); debounceWork?.cancel() }
+    deinit { removeObservers(); debounceWork?.cancel() }
+
+    private func removeObservers() {
+        for center in [CFNotificationCenterGetDistributedCenter(), CFNotificationCenterGetLocalCenter()] {
+            CFNotificationCenterRemoveEveryObserver(center, selfPtr)
+        }
+        if let appKitObserver { NotificationCenter.default.removeObserver(appKitObserver) }
+        appKitObserver = nil
+    }
     func start() {
         guard !enabled else { return }; enabled = true
-        let center = CFNotificationCenterGetLocalCenter()
-        CFNotificationCenterAddObserver(
-            center,
-            Unmanaged.passUnretained(self).toOpaque(),
-            { _, observer, _, _, _ in
+        for center in [CFNotificationCenterGetDistributedCenter(), CFNotificationCenterGetLocalCenter()] {
+            CFNotificationCenterAddObserver(center, selfPtr, { _, observer, _, _, _ in
                 guard let observer else { return }
-                let mon = Unmanaged<InputSourceMonitor>.fromOpaque(observer).takeUnretainedValue()
-                DispatchQueue.main.async { mon.queueRead() }
-            },
-            "TISNotifySelectedKeyboardInputSourceChanged" as CFString,
-            nil,
-            .deliverImmediately
-        )
+                let monitor = Unmanaged<InputSourceMonitor>.fromOpaque(observer).takeUnretainedValue()
+                DispatchQueue.main.async { [weak monitor] in monitor?.queueRead() }
+            }, kTISNotifySelectedKeyboardInputSourceChanged, nil, .deliverImmediately)
+        }
+        appKitObserver = NotificationCenter.default.addObserver(
+            forName: NSTextInputContext.keyboardSelectionDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.queueRead() }
+        currentSourceID = ""
         // 初始记录当前输入法，避免启动时误报
-        if let (name, id) = Self.currentKeyboardSource() {
+        if let (name, id) = readSource() {
             currentSourceID = id
             print("[Input] initial source: \(name) (\(id))")
         }
@@ -50,7 +61,7 @@ final class InputSourceMonitor {
 
     private func readAndNotify() {
         guard enabled else { return }
-        guard let (name, id) = Self.currentKeyboardSource() else { return }
+        guard let (name, id) = readSource() else { return }
         if id == currentSourceID { return }
         currentSourceID = id
         onInputSourceChange?(name)
@@ -73,7 +84,7 @@ final class InputSourceMonitor {
         if let idPtr = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) {
             id = Unmanaged<CFString>.fromOpaque(idPtr).takeUnretainedValue() as String
         }
-        guard !name.isEmpty else { return nil }
+        guard !name.isEmpty, !id.isEmpty else { return nil }
         return (name, id)
     }
 }

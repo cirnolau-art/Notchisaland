@@ -40,11 +40,16 @@ private struct IslandSettingsView: View {
     @State private var loadingShortcuts = false
     @State private var glassBlur = IslandPreferences.shared.glassBlur
     @State private var glassOpacity = IslandPreferences.shared.glassOpacity
+    @State private var glassRimStrength = IslandPreferences.shared.glassRimStrength
+    @State private var lyricsAppearance = IslandPreferences.shared.lyricsAppearance
+    @State private var accentRGB = IslandPreferences.shared.accentRGB
     @State private var airPodsEnabled = IslandPreferences.shared.airPodsEnabled
     @State private var notificationsEnabled = IslandPreferences.shared.notificationsEnabled
     @State private var notificationPreview = IslandPreferences.shared.notificationPreview
     @State private var notificationPlacement = IslandPreferences.shared.notificationPlacement
-    @State private var notificationSide = IslandPreferences.shared.notificationSide
+    @State private var notificationWidth = IslandPreferences.shared.notificationWidth
+    @State private var notificationDepth = IslandPreferences.shared.notificationDepth
+    @State private var lyricsRightBackground = IslandPreferences.shared.lyricsRightBackground
     @State private var lyricsPlacement = IslandPreferences.shared.lyricsPlacement
     @State private var expandedLyricsPlacement = IslandPreferences.shared.expandedLyricsPlacement
     @State private var lyricsAnimation = IslandPreferences.shared.lyricsAnimation
@@ -87,7 +92,7 @@ private struct IslandSettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     if page == 0 { interactionPage }
-                    else if page == 1 { appearancePage; displayPage }
+                    else if page == 1 { lyricsAppearancePage; appearancePage; displayPage }
                     else if page == 2 { connectedPage }
                     else if page == 3 { permissionsPage }
                     else if page == 4 { dailyPage }
@@ -145,6 +150,7 @@ private struct IslandSettingsView: View {
             card("即时提示") {
                 Toggle("音量与亮度", isOn: $systemHUD).onChange(of: systemHUD) { _, value in IslandPreferences.shared.systemHUDEnabled = value }
                 Toggle("输入法切换", isOn: $inputHUD).onChange(of: inputHUD) { _, value in IslandPreferences.shared.inputHUDEnabled = value }
+                Button("预览输入法提示") { IslandController.shared.previewInputSource() }.disabled(!inputHUD)
                 Toggle("电源连接", isOn: $powerHUD).onChange(of: powerHUD) { _, value in IslandPreferences.shared.powerHUDEnabled = value }
                 Text("耳机与通知可在“设备与通知”中分别开关。").font(.system(size: 11)).foregroundStyle(.secondary)
             }
@@ -171,19 +177,64 @@ private struct IslandSettingsView: View {
     }
     private var appearancePage: some View {
         card("刘海外观") {
+          ColorPicker("控件强调色", selection: Binding(
+            get: { Color(nsColor: LyricsAppearance.color(for: accentRGB)) },
+            set: { if let rgb = LyricsAppearance.rgb(for: NSColor($0)) { accentRGB = rgb; IslandPreferences.shared.accentRGB = rgb } }
+          ), supportsOpacity: false)
           if supportsGlass {
             Picker("背景模式", selection: $background) { Text("纯黑").tag(IslandBackgroundStyle.black); Text("液态玻璃").tag(IslandBackgroundStyle.glass) }
                 .pickerStyle(.segmented).onChange(of: background) { _, value in IslandPreferences.shared.backgroundStyle = value }
             if background == .glass {
-                    HStack { Text("背景模糊"); Slider(value: $glassBlur, in: 0...1).onChange(of: glassBlur) { _, value in IslandPreferences.shared.glassBlur = value }; Text("\(Int(glassBlur * 100))%").monospacedDigit().frame(width: 38) }
-                    HStack { Text("不透明度"); Slider(value: $glassOpacity, in: 0...1).onChange(of: glassOpacity) { _, value in IslandPreferences.shared.glassOpacity = value }; Text("\(Int(glassOpacity * 100))%").monospacedDigit().frame(width: 38) }
-                    Text("顶部保持纯黑遮住刘海，下方过渡到 Apple 原生液态玻璃，保留通透边缘。模糊控制原生材质强度；系统未提供自定义折射或模糊半径。").font(.system(size: 11)).foregroundStyle(.secondary)
+                glassSlider("磨砂强度", value: $glassBlur)
+                    .onChange(of: glassBlur) { _, value in IslandPreferences.shared.glassBlur = value }
+                glassSlider("深色底", value: $glassOpacity)
+                    .onChange(of: glassOpacity) { _, value in IslandPreferences.shared.glassOpacity = value }
+                glassSlider("边缘高光", value: $glassRimStrength)
+                    .onChange(of: glassRimStrength) { _, value in IslandPreferences.shared.glassRimStrength = value }
+                Button("恢复轻透默认值") {
+                    glassBlur = IslandBackdropConfiguration.defaultFrost
+                    glassOpacity = IslandBackdropConfiguration.defaultDarkening
+                    glassRimStrength = IslandBackdropConfiguration.defaultRim
+                }
             } else { Text("保持纯黑、清晰的刘海轮廓。玻璃参数会独立保存，切换不会覆盖。").font(.system(size: 11)).foregroundStyle(.secondary) }
             Text("空闲时不保留玻璃合成效果；遵循系统“减少透明度”设置。").font(.system(size: 11)).foregroundStyle(.tertiary)
           } else {
               Text("纯黑背景").font(.system(size: 13))
               Text("轮廓贴合屏幕刘海，收起后保持原有厚度。").font(.system(size: 11)).foregroundStyle(.secondary)
           }
+        }
+    }
+    private var lyricsAppearancePage: some View {
+        card("歌词外观") {
+            LyricAppearancePreview(appearance: lyricsAppearance, rightBackground: lyricsRightBackground).frame(height: 54).accessibilityHidden(true)
+            Toggle("显示右侧歌词底色", isOn: $lyricsRightBackground)
+                .onChange(of: lyricsRightBackground) { _, value in IslandPreferences.shared.lyricsRightBackground = value }
+            lyricSlider("显示宽度", value: $lyricsAppearance.width, range: LyricsAppearance.widthRange,
+                        formatted: "\(Int(lyricsAppearance.width.rounded())) pt")
+            lyricSlider("底色不透明度", value: $lyricsAppearance.opacity, range: 0...1,
+                        formatted: "\(Int((lyricsAppearance.opacity * 100).rounded()))%")
+            lyricSlider("字号", value: $lyricsAppearance.size, range: LyricsAppearance.fontSizeRange,
+                        formatted: "\(Int(lyricsAppearance.size.rounded())) pt")
+            Picker("字重", selection: $lyricsAppearance.weight) {
+                ForEach(LyricsAppearance.Weight.allCases, id: \.self) { Text($0.title).tag($0) }
+            }.pickerStyle(.segmented)
+            ColorPicker("字体颜色", selection: Binding(
+                get: { Color(nsColor: lyricsAppearance.color) },
+                set: { if let rgb = LyricsAppearance.rgb(for: NSColor($0)) { lyricsAppearance.colorRGB = rgb } }
+            ), supportsOpacity: false)
+            lyricSlider("文字光晕", value: $lyricsAppearance.glow, range: 0...1,
+                        formatted: "\(Int((lyricsAppearance.glow * 100).rounded()))%")
+            Button("恢复歌词默认样式", systemImage: "arrow.counterclockwise") { lyricsAppearance = LyricsAppearance() }
+                .disabled(lyricsAppearance == LyricsAppearance())
+        }.onChange(of: lyricsAppearance) { _, value in IslandPreferences.shared.lyricsAppearance = value }
+    }
+
+    private func lyricSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>,
+                             formatted: String) -> some View {
+        HStack(spacing: 12) {
+            Text(title).frame(width: 96, alignment: .leading)
+            Slider(value: value, in: range).accessibilityLabel(title)
+            Text(formatted).monospacedDigit().foregroundStyle(.secondary).frame(width: 50, alignment: .trailing)
         }
     }
     private var connectedPage: some View {
@@ -198,18 +249,17 @@ private struct IslandSettingsView: View {
             card("刘海通知") {
                 Toggle("接收系统通知横幅", isOn: $notificationsEnabled).onChange(of: notificationsEnabled) { _, value in IslandPreferences.shared.notificationsEnabled = value }
                 Toggle("显示通知标题与正文", isOn: $notificationPreview).onChange(of: notificationPreview) { _, value in IslandPreferences.shared.notificationPreview = value }
-                Picker("通知位置", selection: $notificationPlacement) { ForEach(NotificationPlacement.allCases, id: \.rawValue) { Text($0.title).tag($0) } }.pickerStyle(.segmented).onChange(of: notificationPlacement) { _, value in IslandPreferences.shared.notificationPlacement = value }
+                Picker("通知样式", selection: $notificationPlacement) { ForEach(NotificationPlacement.allCases, id: \.rawValue) { Text($0.title).tag($0) } }.pickerStyle(.segmented).onChange(of: notificationPlacement) { _, value in IslandPreferences.shared.notificationPlacement = value }
                 if notificationPlacement == .sides {
-                    Picker("小窗口位置", selection: $notificationSide) {
-                        Text("刘海左侧").tag(NotificationSide.left)
-                        Text("刘海右侧").tag(NotificationSide.right)
-                    }.pickerStyle(.segmented).onChange(of: notificationSide) { _, value in
-                        IslandPreferences.shared.notificationSide = value
-                    }
+                    lyricSlider("通知宽度", value: $notificationWidth, range: NotchNotificationLayout.widthRange,
+                                formatted: "\(Int(notificationWidth.rounded())) pt")
+                        .onChange(of: notificationWidth) { _, value in IslandPreferences.shared.notificationWidth = value }
+                    lyricSlider("通知下展高度", value: $notificationDepth, range: NotchNotificationLayout.depthRange,
+                                formatted: "\(Int(notificationDepth.rounded())) pt")
+                        .onChange(of: notificationDepth) { _, value in IslandPreferences.shared.notificationDepth = value }
                 }
                 Text(notificationStatus.isEmpty ? IslandController.shared.notificationStatus : notificationStatus).font(.system(size: 11)).foregroundStyle(.secondary)
                 HStack { Button("预览通知") { IslandController.shared.previewNotification() }; Button("重新连接") { IslandController.shared.notificationBridge.reconnect() }; Button("辅助功能设置") { openPrivacy("Accessibility") } }
-                Text("需要辅助功能权限，并保留来源应用的系统横幅。两侧小窗口不改变刘海尺寸；专注／勿扰模式延后投递的通知不会显示。").font(.system(size: 11)).foregroundStyle(.secondary)
             }
         }
     }
@@ -315,6 +365,15 @@ private struct IslandSettingsView: View {
             }
         }
     }
+    private func glassSlider(_ title: String, value: Binding<Double>) -> some View {
+        HStack(spacing: 12) {
+            Text(title).frame(width: 58, alignment: .leading)
+            Slider(value: value, in: 0...1).accessibilityLabel(title)
+            Text(value.wrappedValue, format: .percent.precision(.fractionLength(0)))
+                .monospacedDigit().foregroundStyle(.secondary).frame(width: 38, alignment: .trailing)
+        }
+    }
+
     private func chooseLyricsDirectory() {
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false; panel.prompt = "选择"
         if panel.runModal() == .OK, let url = panel.url { lyricsDirectory = url.path; IslandPreferences.shared.lyricsDirectory = url.path }

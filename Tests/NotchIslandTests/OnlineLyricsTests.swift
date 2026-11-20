@@ -23,8 +23,9 @@ private actor LyricsHTTPFixture {
 }
 
 final class OnlineLyricsTests: XCTestCase {
-    private func track(_ title: String = "歌+曲") -> LyricsQuery {
-        LyricsQuery(MediaInfo(title: title, artist: "歌手", album: "专辑", duration: 201), directory: "", online: true)!
+    private func track(_ title: String = "歌+曲", preferWordTiming: Bool = false) -> LyricsQuery {
+        LyricsQuery(MediaInfo(title: title, artist: "歌手", album: "专辑", duration: 201),
+                    directory: "", online: true, preferWordTiming: preferWordTiming)!
     }
 
     func testLookupEscapesMetadataAndPrefersTimedExactVersion() async {
@@ -55,6 +56,42 @@ final class OnlineLyricsTests: XCTestCase {
         let urls = await fixture.requests.compactMap(\.url)
         XCTAssertEqual(urls.map(\.host), ["lrclib.net", "lrclib.net", "music.163.com", "music.163.com"])
         XCTAssertTrue(urls.last!.query!.contains("id=22"))
+    }
+
+    func testWordModeEnrichesMatchingPlainLyricsViaNetEaseYRC() async {
+        let exact = #"{"trackName":"歌+曲","artistName":"歌手","albumName":"专辑","duration":201,"syncedLyrics":"[00:10]听海"}"#
+        let search = #"{"code":200,"result":{"songs":[{"id":22,"name":"歌+曲","artists":[{"name":"歌手"}],"album":{"name":"专辑"},"duration":201305}]}}"#
+        let lyrics = #"{"code":200,"lrc":{"lyric":"[00:10]听海"},"yrc":{"lyric":"[10000,2100](10000,900,0)听(11020,1080,0)海"}}"#
+        let fixture = LyricsHTTPFixture([.init(200, exact), .init(200, search), .init(200, lyrics)])
+        let result = await OnlineLyricsProvider(request: { try await fixture.send($0) })
+            .fetch(track(preferWordTiming: true))
+        XCTAssertEqual(result.lines.first?.segments.map(\.text), ["听", "海"])
+        let urls = await fixture.requests.compactMap(\.url)
+        XCTAssertEqual(urls.map(\.path), ["/api/get", "/api/search/get/web", "/api/song/lyric/v1"])
+        XCTAssertTrue(urls.last!.query!.contains("yv=-1"))
+    }
+
+    func testMissingWordTimingDoesNotReplaceMatchedLineLyrics() async {
+        let exact = #"{"trackName":"歌+曲","artistName":"歌手","albumName":"专辑","duration":201,"syncedLyrics":"[00:10]原歌词"}"#
+        let search = #"{"code":200,"result":{"songs":[{"id":22,"name":"歌+曲","artists":[{"name":"歌手"}],"album":{"name":"专辑"},"duration":201305}]}}"#
+        let lyrics = #"{"code":200,"lrc":{"lyric":"[00:11]备用逐行"},"yrc":{"lyric":""}}"#
+        let fixture = LyricsHTTPFixture([.init(200, exact), .init(200, search), .init(200, lyrics)])
+        let result = await OnlineLyricsProvider(request: { try await fixture.send($0) })
+            .fetch(track(preferWordTiming: true))
+        XCTAssertEqual(result.lines, [LyricLine(time: 10, text: "原歌词")])
+    }
+
+    func testSlowOptionalWordTimingReturnsTheMatchedLineLyrics() async {
+        let exact = #"{"trackName":"歌+曲","artistName":"歌手","albumName":"专辑","duration":201,"syncedLyrics":"[00:10]原歌词"}"#
+        let fixture = LyricsHTTPFixture([.init(200, exact)])
+        let provider = OnlineLyricsProvider { request in
+            if request.url?.host == "music.163.com" { try await Task.sleep(for: .seconds(12)) }
+            return try await fixture.send(request)
+        }
+        let start = ContinuousClock.now
+        let result = await provider.fetch(track(preferWordTiming: true))
+        XCTAssertLessThan(ContinuousClock.now - start, .seconds(5))
+        XCTAssertEqual(result.lines, [LyricLine(time: 10, text: "原歌词")])
     }
 
     func testPlainLyricsNeverFabricateTimingAndInstrumentalsStayEmpty() async {
@@ -120,5 +157,58 @@ final class OnlineLyricsTests: XCTestCase {
         XCTAssertEqual(lookup.select(second), [LyricLine(time: 0, text: "B")])
         XCTAssertEqual(requested, ["A", "B"])
         XCTAssertEqual(deliveries, [[LyricLine(time: 0, text: "B")]])
+    }
+
+    @MainActor
+    func testPrecisionSwitchPreservesCurrentLyricsDuringAndAfterAnEnrichmentMiss() async {
+        let initial = expectation(description: "line lyrics loaded")
+        let enriched = expectation(description: "enrichment completed")
+        let began = expectation(description: "enrichment began")
+        let line = LyricLine(time: 10, text: "当前歌词")
+        let plain = track()
+        let precise = track(preferWordTiming: true)
+        var release: CheckedContinuation<Void, Never>?
+        let lookup = LyricsLookup { @MainActor query in
+            guard query == precise else { return LyricsResult([line]) }
+            await withCheckedContinuation { continuation in
+                release = continuation
+                began.fulfill()
+            }
+            return LyricsResult([])
+        }
+        lookup.onChange = { lines in
+            XCTAssertEqual(lines, [line])
+            initial.fulfill()
+        }
+        XCTAssertEqual(lookup.select(plain), [])
+        await fulfillment(of: [initial], timeout: 2)
+        lookup.onChange = { lines in
+            XCTAssertEqual(lines, [line])
+            enriched.fulfill()
+        }
+        XCTAssertEqual(lookup.select(precise), [line])
+        await fulfillment(of: [began], timeout: 2)
+        XCTAssertEqual(lookup.select(precise), [line])
+        release?.resume()
+        await fulfillment(of: [enriched], timeout: 2)
+        XCTAssertEqual(lookup.select(precise), [line])
+        XCTAssertEqual(lookup.select(track("下一首", preferWordTiming: true)), [])
+        _ = lookup.select(nil)
+    }
+
+    @MainActor
+    func testPrecisionSwitchDoesNotReuseExpiredLyrics() async {
+        let completed = expectation(description: "expired result discarded")
+        let lookup = LyricsLookup { _ in
+            LyricsResult([LyricLine(time: 10, text: "已过期")], validUntil: .distantPast)
+        }
+        lookup.onChange = { lines in
+            XCTAssertTrue(lines.isEmpty)
+            completed.fulfill()
+        }
+        XCTAssertEqual(lookup.select(track()), [])
+        await fulfillment(of: [completed], timeout: 2)
+        XCTAssertEqual(lookup.select(track(preferWordTiming: true)), [])
+        _ = lookup.select(nil)
     }
 }

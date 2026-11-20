@@ -1,6 +1,9 @@
 import AppKit
 
-extension Notification.Name { static let islandPreferencesChanged = Notification.Name("NotchIsland.preferencesChanged") }
+extension Notification.Name {
+    static let islandPreferencesChanged = Notification.Name("NotchIsland.preferencesChanged")
+    static let islandAppearanceChanged = Notification.Name("NotchIsland.appearanceChanged")
+}
 
 final class IslandPreferences {
     static let shared = IslandPreferences(defaults: SnapshotMode.enabled ? SnapshotMode.defaults : .standard)
@@ -23,15 +26,24 @@ final class IslandPreferences {
     var powerHUDEnabled: Bool { get { defaults.object(forKey: "notchisland.powerHUDEnabled") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.powerHUDEnabled"); changed() } }
     var calendarEnabled: Bool { get { defaults.bool(forKey: "notchisland.calendarEnabled") } set { defaults.set(newValue, forKey: "notchisland.calendarEnabled"); changed() } }
     var backgroundStyle: IslandBackgroundStyle { get { IslandBackgroundStyle(rawValue: defaults.integer(forKey: "notchisland.backgroundStyle")) ?? .black } set { defaults.set(newValue.rawValue, forKey: "notchisland.backgroundStyle"); changed() } }
-    var glassBlur: Double { get { defaults.object(forKey: "notchisland.glassBlur") as? Double ?? 0.75 } set { defaults.set(min(1, max(0, newValue)), forKey: "notchisland.glassBlur"); changed() } }
-    var glassOpacity: Double { get { defaults.object(forKey: "notchisland.glassOpacity") as? Double ?? 0.58 } set { defaults.set(min(1, max(0, newValue)), forKey: "notchisland.glassOpacity"); changed() } }
+    var glassBlur: Double { get { defaults.object(forKey: "notchisland.glassBlur") as? Double ?? IslandBackdropConfiguration.defaultFrost } set { defaults.set(min(1, max(0, newValue)), forKey: "notchisland.glassBlur"); changed() } }
+    var glassOpacity: Double { get { defaults.object(forKey: "notchisland.glassOpacity") as? Double ?? IslandBackdropConfiguration.defaultDarkening } set { defaults.set(min(1, max(0, newValue)), forKey: "notchisland.glassOpacity"); changed() } }
+    var glassRimStrength: Double { get { defaults.object(forKey: "notchisland.glassRimStrength") as? Double ?? IslandBackdropConfiguration.defaultRim } set { defaults.set(min(1, max(0, newValue)), forKey: "notchisland.glassRimStrength"); changed() } }
     var airPodsEnabled: Bool { get { defaults.object(forKey: "notchisland.airPodsEnabled") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.airPodsEnabled"); changed() } }
     var notificationsEnabled: Bool { get { defaults.object(forKey: "notchisland.notificationsEnabled") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.notificationsEnabled"); changed() } }
     var notificationPreview: Bool { get { defaults.object(forKey: "notchisland.notificationPreview") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.notificationPreview"); changed() } }
     var notificationPlacement: NotificationPlacement { get { NotificationPlacement(rawValue: defaults.integer(forKey: "notchisland.notificationPlacement")) ?? .island } set { defaults.set(newValue.rawValue, forKey: "notchisland.notificationPlacement"); changed() } }
-    var notificationSide: NotificationSide {
-        get { NotificationSide(rawValue: defaults.integer(forKey: "notchisland.notificationSide")) ?? .right }
-        set { defaults.set(newValue.rawValue, forKey: "notchisland.notificationSide"); changed() }
+    var notificationWidth: Double {
+        get { defaults.object(forKey: "notchisland.notificationWidth") as? Double ?? NotchNotificationLayout.defaultWidth }
+        set { defaults.set(newValue, forKey: "notchisland.notificationWidth"); appearanceChanged() }
+    }
+    var notificationDepth: Double {
+        get { defaults.object(forKey: "notchisland.notificationDepth") as? Double ?? NotchNotificationLayout.defaultDepth }
+        set { defaults.set(newValue, forKey: "notchisland.notificationDepth"); appearanceChanged() }
+    }
+    var lyricsRightBackground: Bool {
+        get { defaults.object(forKey: "notchisland.lyricsRightBackground") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "notchisland.lyricsRightBackground"); appearanceChanged() }
     }
     var lyricsPlacement: LyricsPlacement {
         get { LyricsPlacement(rawValue: defaults.object(forKey: "notchisland.lyricsPlacement") as? Int ?? LyricsPlacement.below.rawValue) ?? .below }
@@ -53,6 +65,28 @@ final class IslandPreferences {
         set { defaults.set(newValue.rawValue, forKey: "notchisland.expandedLyricsPlacement"); changed() }
     }
     var showsAnyLyrics: Bool { lyricsPlacement != .hidden || expandedLyricsPlacement != .hidden }
+    var lyricsAppearance: LyricsAppearance {
+        get {
+            guard let data = defaults.data(forKey: "notchisland.lyricsAppearance"),
+                  let value = try? PropertyListDecoder().decode(LyricsAppearance.self, from: data) else { return LyricsAppearance() }
+            return value.normalized()
+        }
+        set {
+            let value = newValue.normalized()
+            guard lyricsAppearance != value, let data = try? PropertyListEncoder().encode(value) else { return }
+            defaults.set(data, forKey: "notchisland.lyricsAppearance")
+            NotificationCenter.default.post(name: .islandAppearanceChanged, object: nil)
+        }
+    }
+    var accentRGB: UInt32 {
+        get { UInt32(clamping: defaults.object(forKey: "notchisland.accentRGB") as? Int ?? 0xFFFFFF) & 0xFFFFFF }
+        set {
+            let value = newValue & 0xFFFFFF
+            guard value != accentRGB else { return }
+            defaults.set(Int(value), forKey: "notchisland.accentRGB")
+            NotificationCenter.default.post(name: .islandAppearanceChanged, object: nil)
+        }
+    }
     var lyricsAnimation: LyricsAnimationStyle { get { LyricsAnimationStyle(rawValue: defaults.object(forKey: "notchisland.lyricsAnimation") as? Int ?? LyricsAnimationStyle.appleMusic.rawValue) ?? .appleMusic } set { defaults.set(newValue.rawValue, forKey: "notchisland.lyricsAnimation"); changed() } }
     var lyricsDirectory: String { get { defaults.string(forKey: "notchisland.lyricsDirectory") ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Music/NotchIsland Lyrics").path } set { defaults.set(newValue, forKey: "notchisland.lyricsDirectory"); changed() } }
     var onlineLyrics: Bool { get { defaults.object(forKey: "notchisland.onlineLyrics") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.onlineLyrics"); changed() } }
@@ -66,6 +100,7 @@ final class IslandPreferences {
     var autoHide: TimeInterval { get { defaults.object(forKey: "notchisland.autoHideSeconds") as? Double ?? 10 } set { defaults.set(newValue, forKey: "notchisland.autoHideSeconds"); changed() } }
     var reduceMotion: Bool { gentleMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     func changed() { NotificationCenter.default.post(name: .islandPreferencesChanged, object: nil) }
+    func appearanceChanged() { NotificationCenter.default.post(name: .islandAppearanceChanged, object: nil) }
     var screen: NSScreen? {
         if displayID != 0, let match = NSScreen.screens.first(where: { $0.displayID == displayID }) { return match }
         return NSScreen.screens.first(where: { CGDisplayIsBuiltin($0.displayID) != 0 }) ?? NSScreen.screens.first
@@ -73,7 +108,7 @@ final class IslandPreferences {
 }
 
 enum NotificationPlacement: Int, CaseIterable { case island, sides
-    var title: String { self == .island ? "刘海展开" : "两侧小窗口" }
+    var title: String { self == .island ? "完整卡片" : "贴合刘海" }
 }
 
 extension NSScreen {

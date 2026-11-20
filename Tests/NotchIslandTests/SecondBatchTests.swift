@@ -7,6 +7,22 @@ final class SecondBatchTests: XCTestCase {
         XCTAssertEqual(IslandPreferences.resolvedBackground(.glass, glassAvailable: true), .glass)
         XCTAssertEqual(IslandPreferences.resolvedBackground(.black, glassAvailable: true), .black)
     }
+    func testGlassFrostAndDimmingLeaveTheNotchMaskOpaque() {
+        let clear = IslandBackdropConfiguration(style: .glass, blur: 0, opacity: 0, rimStrength: 0)
+        let frosted = IslandBackdropConfiguration(style: .glass, blur: 1, opacity: 0)
+        let dimmed = IslandBackdropConfiguration(style: .glass, blur: 0, opacity: 1)
+        XCTAssertEqual(clear.frostAlpha, 0)
+        XCTAssertEqual(clear.tintAlphas, [1, 1, 0, 0])
+        XCTAssertGreaterThan(frosted.frostAlpha, 0.85)
+        XCTAssertEqual(frosted.tintAlphas, clear.tintAlphas)
+        XCTAssertEqual(dimmed.frostAlpha, 0)
+        XCTAssertEqual(Array(dimmed.tintAlphas.prefix(2)), [1, 1])
+        XCTAssertGreaterThan(dimmed.tintAlphas[3], 0.65)
+        let stops = IslandBackdropView.tintStops(height: 225, notchHeight: 38)
+        XCTAssertGreaterThanOrEqual(stops[1] * 225, 38)
+        XCTAssertLessThan(stops[1], stops[2])
+        XCTAssertEqual(stops.last, 1)
+    }
     func testModernBannerTitleAndBodyAreNotMistakenForAppAndTitle() throws {
         let payload = try XCTUnwrap(BannerSemantics.modernPayload(title: "评审开始", body: "点击加入", description: "日历 评审开始, 点击加入"))
         XCTAssertEqual(payload.source, "日历"); XCTAssertEqual(payload.title, "评审开始"); XCTAssertEqual(payload.body, "点击加入")

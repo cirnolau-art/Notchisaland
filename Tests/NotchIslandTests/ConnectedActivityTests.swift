@@ -44,6 +44,30 @@ final class ConnectedActivityTests: XCTestCase {
         XCTAssertTrue(AirPodsProfileParser.parse(Data("bad json".utf8)).isEmpty)
         XCTAssertNil(AirPodsProfileParser.select([], previousAddress: nil))
     }
+    func testCachedBatteryWinsOverAnOldPairWithoutBattery() {
+        let oldPair = AirPodsSnapshot(name: "Old AirPods", address: "AA:BB", connected: false)
+        let currentPair = AirPodsSnapshot(name: "Current AirPods Pro", address: "CC:DD", connected: false, left: 79, right: 80, caseBattery: 91)
+        XCTAssertEqual(AirPodsProfileParser.select([oldPair, currentPair], previousAddress: "aa-bb")?.address, "CC:DD")
+    }
+    func testBasicProfileRetainsHardwareAddressAlongsideCachedBattery() throws {
+        let profile: [String: Any] = ["SPBluetoothDataType": [["device_not_connected": [["AirPods Pro": [
+            "device_address": "AA:BB:CC:DD:EE:FF", "device_productID": "0x2027",
+            "device_batteryLevelLeft": "79%", "device_batteryLevelRight": "80%", "device_batteryLevelCase": "91%"
+        ]]]]]]
+        let snapshot = try XCTUnwrap(AirPodsProfileParser.parse(JSONSerialization.data(withJSONObject: profile)).first)
+        XCTAssertEqual(snapshot.address, "AA:BB:CC:DD:EE:FF")
+        XCTAssertEqual(snapshot.left, 79); XCTAssertEqual(snapshot.right, 80); XCTAssertEqual(snapshot.caseBattery, 91)
+        XCTAssertFalse(snapshot.connected)
+        let selected = AirPodsProfileParser.applyingConnections([snapshot], connectedAddresses: ["aa-bb-cc-dd-ee-ff"], disconnectedAddress: nil)
+        XCTAssertTrue(try XCTUnwrap(selected.first).connected)
+    }
+    func testBatteryCacheSurvivesHardwareAddressFormattingChanges() {
+        let previous = AirPodsSnapshot(name: "AirPods Pro", address: "AA-BB-CC-DD-EE-FF", connected: false, left: 79, right: 80, caseBattery: 91)
+        let current = AirPodsSnapshot(name: "AirPods Pro", address: "aa:bb:cc:dd:ee:ff", connected: true, left: 78)
+        let result = current.preservingKnownBattery(from: previous)
+        XCTAssertEqual(result.left, 78); XCTAssertEqual(result.right, 80); XCTAssertEqual(result.caseBattery, 91)
+        XCTAssertEqual(result.cachedFields, ["right", "case"])
+    }
     func testBannerTextExcludesButtonsAndRelativeTime() throws {
         let content = try XCTUnwrap(BannerTextParser.parse(["日历", "刚刚", "设计评审", "10 分钟后开始", "关闭", "选项", "10 分钟后开始"]))
         XCTAssertEqual(content.source, "日历"); XCTAssertEqual(content.title, "设计评审"); XCTAssertEqual(content.body, "10 分钟后开始")

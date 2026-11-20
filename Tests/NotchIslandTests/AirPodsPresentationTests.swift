@@ -40,12 +40,14 @@ final class AirPodsPresentationTests: XCTestCase {
         policy.observeOutput(address, at: start.addingTimeInterval(5))
         XCTAssertFalse(policy.takePresentation(for: snapshot, confirmedConnections: connected, at: start.addingTimeInterval(7)))
     }
-    func testRouteFlappingAndBriefBluetoothReconnectNeverRepeat() {
+    func testInitialRouteNegotiationSettlesOnceAndBriefReconnectDoesNotRepeat() {
         var policy = AirPodsPresentationPolicy(); policy.observeOutput(nil, at: start)
         policy.observeOutput(address, at: start.addingTimeInterval(1))
         policy.observeOutput(nil, at: start.addingTimeInterval(2))
         policy.observeOutput(address, at: start.addingTimeInterval(3))
-        XCTAssertFalse(policy.takePresentation(for: snapshot, confirmedConnections: connected, at: start.addingTimeInterval(5)))
+        XCTAssertFalse(policy.takePresentation(for: snapshot, confirmedConnections: connected, at: start.addingTimeInterval(4)))
+        XCTAssertTrue(policy.takePresentation(for: snapshot, confirmedConnections: connected, at: start.addingTimeInterval(5)))
+        XCTAssertFalse(policy.takePresentation(for: snapshot, confirmedConnections: connected, at: start.addingTimeInterval(6)))
         policy.disconnected(address, at: start.addingTimeInterval(200))
         policy.observeOutput(nil, at: start.addingTimeInterval(200))
         policy.observeOutput(address, at: start.addingTimeInterval(202))
@@ -85,7 +87,35 @@ final class AirPodsPresentationTests: XCTestCase {
         XCTAssertFalse(policy.takePresentation(for: snapshot, confirmedConnections: connected, at: start.addingTimeInterval(23)))
         policy.observeOutput(nil, at: start.addingTimeInterval(30))
         policy.observeOutput(address, at: start.addingTimeInterval(61))
-        XCTAssertFalse(policy.takePresentation(for: snapshot, confirmedConnections: connected, at: start.addingTimeInterval(74)))
+        XCTAssertFalse(policy.takePresentation(for: snapshot, confirmedConnections: connected, at: start.addingTimeInterval(82)))
+    }
+    func testTemporaryRouteReadFailureRequiresReconfirmationWithoutLosingANewActivation() {
+        var policy = AirPodsPresentationPolicy(); policy.observeOutput(nil, at: start)
+        policy.observeOutput(address, at: start.addingTimeInterval(1))
+        policy.outputUnavailable()
+        XCTAssertEqual(policy.pendingAddress(at: start.addingTimeInterval(3)), address)
+        XCTAssertFalse(policy.takePresentation(for: snapshot, confirmedConnections: connected, at: start.addingTimeInterval(3)))
+        policy.observeOutput(address, at: start.addingTimeInterval(4))
+        XCTAssertTrue(policy.takePresentation(for: snapshot, confirmedConnections: connected, at: start.addingTimeInterval(4)))
+    }
+    func testDelayedBatteryAndBusyUIKeepEventEligibleUntilAccepted() {
+        var policy = AirPodsPresentationPolicy(); policy.observeOutput(nil, at: start)
+        policy.observeOutput(address, at: start.addingTimeInterval(1))
+        XCTAssertNil(policy.deadline(for: nil, confirmedConnections: connected, at: start.addingTimeInterval(4)))
+        XCTAssertEqual(policy.pendingAddress(at: start.addingTimeInterval(14)), address)
+        let ready = start.addingTimeInterval(14)
+        XCTAssertNotNil(policy.deadline(for: snapshot, confirmedConnections: connected, at: ready))
+        // Checking readiness is not delivery. A HUD can finish without starting cooldown.
+        XCTAssertNotNil(policy.deadline(for: snapshot, confirmedConnections: connected, at: ready.addingTimeInterval(2)))
+        XCTAssertTrue(policy.takePresentation(for: snapshot, confirmedConnections: connected, at: ready.addingTimeInterval(2)))
+        XCTAssertNil(policy.pendingAddress(at: ready.addingTimeInterval(3)))
+    }
+    func testStartupStableRouteBrieflyRestoringRemainsSilent() {
+        var policy = AirPodsPresentationPolicy(); policy.observeOutput(address, at: start)
+        policy.observeOutput(nil, at: start.addingTimeInterval(60))
+        policy.observeOutput(address, at: start.addingTimeInterval(61))
+        XCTAssertNil(policy.pendingAddress(at: start.addingTimeInterval(63)))
+        XCTAssertFalse(policy.takePresentation(for: snapshot, confirmedConnections: connected, at: start.addingTimeInterval(63)))
     }
     func testGenuineLaterUseCanPresentAgainAfterCooldown() {
         var policy = AirPodsPresentationPolicy(); policy.observeOutput(nil, at: start)

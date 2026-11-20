@@ -13,7 +13,7 @@ struct AirPodsSnapshot: Equatable {
     var cachedFields: Set<String> = []
     var hasBattery: Bool { left != nil || right != nil || caseBattery != nil }
     func preservingKnownBattery(from previous: Self?) -> Self {
-        guard let previous, previous.address == address else { return self }
+        guard let previous, AirPodsProfileParser.normalizedAddress(previous.address) == AirPodsProfileParser.normalizedAddress(address) else { return self }
         var result = self
         result.left = left ?? previous.left; result.right = right ?? previous.right; result.caseBattery = caseBattery ?? previous.caseBattery
         if left == nil, previous.left != nil { result.cachedFields.insert("left") }
@@ -68,7 +68,9 @@ enum AirPodsProfileParser {
         let previous = previousAddress.map(normalizedAddress)
         let connected = snapshots.filter(\.connected)
         return connected.first(where: { normalizedAddress($0.address) == previous }) ?? connected.first
-            ?? snapshots.first(where: { normalizedAddress($0.address) == previous }) ?? snapshots.first(where: \.hasBattery) ?? snapshots.first
+            ?? snapshots.first(where: { normalizedAddress($0.address) == previous && $0.hasBattery })
+            ?? snapshots.first(where: \.hasBattery)
+            ?? snapshots.first(where: { normalizedAddress($0.address) == previous }) ?? snapshots.first
     }
 }
 

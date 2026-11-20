@@ -7,8 +7,15 @@ struct LyricsQuery: Hashable {
     let duration: Int?
     let directory: String
     let online: Bool
+    private(set) var preferWordTiming: Bool
 
-    init?(_ info: MediaInfo?, directory: String, online: Bool) {
+    var alternatePrecision: Self {
+        var query = self
+        query.preferWordTiming.toggle()
+        return query
+    }
+
+    init?(_ info: MediaInfo?, directory: String, online: Bool, preferWordTiming: Bool = false) {
         guard let info else { return nil }
         title = info.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return nil }
@@ -17,6 +24,7 @@ struct LyricsQuery: Hashable {
         duration = (1...3600).contains(info.duration.rounded()) ? Int(info.duration.rounded()) : nil
         self.directory = directory
         self.online = online
+        self.preferWordTiming = preferWordTiming
     }
 }
 
@@ -50,8 +58,10 @@ final class LyricsLookup {
             selected = query
         }
         guard let query else { return [] }
-        if let hit = cache[query], hit.validUntil > Date() { return hit.lines }
-        guard work == nil else { return [] }
+        let displayed = displayLines(for: query)
+        if cachedResult(for: query) != nil || work != nil || (!query.preferWordTiming && !displayed.isEmpty) {
+            return displayed
+        }
         work = Task { @MainActor [weak self, resolve] in
             let result = await resolve(query)
             guard !Task.isCancelled, let self, selected == query else { return }
@@ -60,9 +70,19 @@ final class LyricsLookup {
                 cache.removeValue(forKey: oldest.key)
             }
             cache[query] = result
-            onChange?(result.lines)
+            onChange?(displayLines(for: query))
         }
-        return []
+        return displayed
+    }
+
+    private func cachedResult(for query: LyricsQuery) -> LyricsResult? {
+        guard let hit = cache[query], hit.validUntil > Date() else { return nil }
+        return hit
+    }
+
+    private func displayLines(for query: LyricsQuery) -> [LyricLine] {
+        if let lines = cachedResult(for: query)?.lines, !lines.isEmpty { return lines }
+        return cachedResult(for: query.alternatePrecision)?.lines ?? []
     }
 
     static func resolveLyrics(_ query: LyricsQuery) async -> LyricsResult {
@@ -98,29 +118,12 @@ actor OnlineLyricsProvider {
     }
 
     func fetch(_ query: LyricsQuery) async -> LyricsResult {
-        let identity = [URLQueryItem(name: "track_name", value: query.title), URLQueryItem(name: "artist_name", value: query.artist)]
         do {
-            var exact = identity
-            if !query.album.isEmpty { exact.append(URLQueryItem(name: "album_name", value: query.album)) }
-            if let duration = query.duration { exact.append(URLQueryItem(name: "duration", value: String(duration))) }
-            if let record: Record = try await read(host: "lrclib.net", path: "/api/get", items: exact), matches(record, query) {
-                if record.instrumental == true { return LyricsResult([]) }
-                let lines = LyricsParser.parse(record.syncedLyrics ?? "")
-                if !lines.isEmpty { return LyricsResult(lines) }
-            }
-            // Album naming varies between players. Keep song, artist and known
-            // duration checks, and prefer the requested album amongst matches.
-            let found: [Record] = try await read(host: "lrclib.net", path: "/api/search", items: identity) ?? []
-            let candidates = found.filter { matches($0, query) }.sorted { lhs, rhs in
-                let lhsAlbum = folded(lhs.albumName ?? "") == folded(query.album)
-                let rhsAlbum = folded(rhs.albumName ?? "") == folded(query.album)
-                if lhsAlbum != rhsAlbum { return lhsAlbum }
-                guard let duration = query.duration else { return false }
-                return abs((lhs.duration ?? 0) - Double(duration)) < abs((rhs.duration ?? 0) - Double(duration))
-            }
-            for record in candidates where record.instrumental != true {
-                let lines = LyricsParser.parse(record.syncedLyrics ?? "")
-                if !lines.isEmpty { return LyricsResult(lines) }
+            if let lines = try await lrclibLyrics(query) {
+                if query.preferWordTiming, query.duration != nil, !lines.isEmpty, !hasWordTiming(lines) {
+                    return await addWordTiming(to: lines, query: query)
+                }
+                return LyricsResult(lines)
             }
             return try await netEaseLyrics(query)
         } catch let retry as RetryLater {
@@ -128,6 +131,50 @@ actor OnlineLyricsProvider {
         } catch {
             return LyricsResult([], validUntil: Date().addingTimeInterval(60))
         }
+    }
+
+    private func addWordTiming(to lines: [LyricLine], query: LyricsQuery) async -> LyricsResult {
+        await withTaskGroup(of: LyricsResult?.self) { group in
+            group.addTask { try? await self.netEaseLyrics(query) }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(2))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            if let first, hasWordTiming(first.lines) { return first }
+            return LyricsResult(lines)
+        }
+    }
+
+    private func lrclibLyrics(_ query: LyricsQuery) async throws -> [LyricLine]? {
+        let identity = [URLQueryItem(name: "track_name", value: query.title), URLQueryItem(name: "artist_name", value: query.artist)]
+        var exact = identity
+        if !query.album.isEmpty { exact.append(URLQueryItem(name: "album_name", value: query.album)) }
+        if let duration = query.duration { exact.append(URLQueryItem(name: "duration", value: String(duration))) }
+        if let record: Record = try await read(host: "lrclib.net", path: "/api/get", items: exact), matches(record, query) {
+            if record.instrumental == true { return [] }
+            let lines = LyricsParser.parse(record.syncedLyrics ?? "")
+            if !lines.isEmpty { return lines }
+        }
+        // Album naming varies between players. Keep artist and duration checks.
+        let found: [Record] = try await read(host: "lrclib.net", path: "/api/search", items: identity) ?? []
+        let candidates = found.filter { matches($0, query) }.sorted { lhs, rhs in
+            let lhsAlbum = folded(lhs.albumName ?? "") == folded(query.album)
+            let rhsAlbum = folded(rhs.albumName ?? "") == folded(query.album)
+            if lhsAlbum != rhsAlbum { return lhsAlbum }
+            guard let duration = query.duration else { return false }
+            return abs((lhs.duration ?? 0) - Double(duration)) < abs((rhs.duration ?? 0) - Double(duration))
+        }
+        for record in candidates where record.instrumental != true {
+            let lines = LyricsParser.parse(record.syncedLyrics ?? "")
+            if !lines.isEmpty { return lines }
+        }
+        return nil
+    }
+
+    private func hasWordTiming(_ lines: [LyricLine]) -> Bool {
+        lines.contains { !$0.segments.isEmpty }
     }
 
     private func folded(_ value: String) -> String {
@@ -160,6 +207,7 @@ actor OnlineLyricsProvider {
         struct LRC: Decodable { let lyric: String? }
         let code: Int
         let lrc: LRC?
+        let yrc: LRC?
     }
 
     private func netEaseLyrics(_ query: LyricsQuery) async throws -> LyricsResult {
@@ -174,9 +222,14 @@ actor OnlineLyricsProvider {
         }
         let song = candidates.first { folded($0.album.name) == folded(query.album) } ?? candidates.first
         guard let song else { return LyricsResult([]) }
-        let queryItems = [URLQueryItem(name: "id", value: String(song.id)), URLQueryItem(name: "lv", value: "-1")]
-        let result: NetEaseLyric? = try await read(host: "music.163.com", path: "/api/song/lyric", items: queryItems)
+        var queryItems = [URLQueryItem(name: "id", value: String(song.id)), URLQueryItem(name: "lv", value: "-1")]
+        if query.preferWordTiming { queryItems.append(URLQueryItem(name: "yv", value: "-1")) }
+        let result: NetEaseLyric? = try await read(host: "music.163.com", path: "/api/song/lyric/v1", items: queryItems)
         guard let result, result.code == 200 else { throw URLError(.badServerResponse) }
+        if let precise = result.yrc?.lyric, query.preferWordTiming {
+            let lines = LyricsParser.parseYRC(precise)
+            if hasWordTiming(lines) { return LyricsResult(lines) }
+        }
         return LyricsResult(LyricsParser.parse(result.lrc?.lyric ?? ""))
     }
 

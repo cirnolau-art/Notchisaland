@@ -29,12 +29,14 @@ struct SystemFocusMode: Equatable {
 }
 
 enum SystemFocusState: Equatable {
-    case unavailable, inactive, active(SystemFocusMode)
+    case unavailable, needsAccessibility, menuItemUnavailable, inactive, active(SystemFocusMode)
 
     var mode: SystemFocusMode? { if case .active(let mode) = self { return mode }; return nil }
     var title: String {
         switch self {
         case .unavailable: return "等待系统专注状态"
+        case .needsAccessibility: return "需要辅助功能权限"
+        case .menuItemUnavailable: return "未读取到专注状态"
         case .inactive: return "专注模式已关闭"
         case .active(let mode): return mode.name
         }
@@ -46,8 +48,7 @@ enum SystemFocusState: Equatable {
             return (json["data"] as? [[String: Any]])?.first
         }
         guard let store = record(assertions) else { return .unavailable }
-        guard let value = store["storeAssertionRecords"] else { return .inactive }
-        guard let records = value as? [[String: Any]] else { return .unavailable }
+        guard let records = store["storeAssertionRecords"] as? [[String: Any]] else { return .unavailable }
         guard !records.isEmpty else { return .inactive }
         let identifiers = records.compactMap { ($0["assertionDetails"] as? [String: Any])?["assertionDetailsModeIdentifier"] as? String }
         guard let identifier = identifiers.first(where: { !$0.isEmpty }) else { return .unavailable }
@@ -56,21 +57,49 @@ enum SystemFocusState: Equatable {
         return .active(.resolve(identifier: identifier, name: mode?["name"] as? String, symbol: mode?["symbolImageName"] as? String))
     }
 
+    private static let controlCenter = Bundle(url: URL(fileURLWithPath: "/System/Library/CoreServices/ControlCenter.app"))
+
+    private static func menuLabels(_ key: String, alternatives: [String], tables: [String] = ["Focus"]) -> [String] {
+        let systemLabels = tables.compactMap { controlCenter?.localizedString(forKey: key, value: "", table: $0) }
+        return alternatives + systemLabels.filter { $0 != key && !$0.isEmpty }.map { $0.lowercased() }
+    }
+
+    private static let focusLabels = menuLabels("Focus", alternatives: ["focus", "focus mode", "专注模式", "專注模式", "集中モード", "집중 모드"],
+                                                tables: ["Focus", "ControlCenterDisplayableModule"])
+    private static let enabledLabels = menuLabels("FOCUS_MODE_ON",
+                                                  alternatives: ["on", "enabled", "active", "开启", "打开", "已开启", "已打开", "啟用", "已啟用", "開啟", "已開啟", "オン", "켬"])
+    private static let disabledLabels = menuLabels("FOCUS_MODE_OFF",
+                                                   alternatives: ["off", "disabled", "inactive", "关闭", "已关闭", "關閉", "已關閉", "停用", "已停用", "オフ", "끔"])
+
+    private static func menuParts(_ description: String) -> [String] {
+        let parts = description.components(separatedBy: CharacterSet(charactersIn: ",，、:：\n"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return parts
+    }
+
     static func menuItemDescription(_ description: String) -> Self {
-        let text = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        let generic = ["Focus", "专注模式", "專注模式"]
-        if generic.contains(where: { $0.caseInsensitiveCompare(text) == .orderedSame }) { return .inactive }
-        for label in generic {
-            for delimiter in [", ", "，", ": ", "："] {
-                if text.hasPrefix(label + delimiter) {
-                    let title = String(text.dropFirst(label.count + delimiter.count))
-                    if ["Off", "关闭", "已关闭", "關閉", "已關閉"].contains(title) { return .inactive }
-                    if ["On", "开启", "已开启", "開啟", "已開啟"].contains(title) { return .active(.resolve(identifier: "")) }
-                    return title.isEmpty ? .unavailable : .active(.resolve(identifier: "", name: title))
-                }
-            }
-        }
-        return .unavailable
+        let parts = menuParts(description)
+        guard !parts.isEmpty else { return .unavailable }
+        let normalized = parts.map { $0.lowercased() }
+        if normalized.contains(where: disabledLabels.contains) { return .inactive }
+        let names = zip(parts, normalized).filter { !focusLabels.contains($0.1) && !enabledLabels.contains($0.1) }
+        if let name = names.first?.0 { return .active(.resolve(identifier: "", name: name)) }
+        return normalized.contains(where: enabledLabels.contains) ? .active(.resolve(identifier: "")) : .inactive
+    }
+
+    static func menuItemState(labels: [String]) -> Self {
+        let states = labels.map(menuItemDescription)
+        if let description = labels.first, menuParts(description).contains(where: { disabledLabels.contains($0.lowercased()) }) { return .inactive }
+        if let active = states.first(where: { $0.mode != nil && $0.mode != .resolve(identifier: "") }) { return active }
+        return states.first(where: { $0 != .unavailable }) ?? .unavailable
+    }
+
+    static func preferredState(store: Self, menu: Self, event: Self) -> Self {
+        if store.mode != nil { return store }
+        if menu.mode != nil { return menu }
+        if store == .inactive || menu == .inactive { return .inactive }
+        return event != .unavailable ? event : menu
     }
 }
 
@@ -136,13 +165,13 @@ final class SystemFocusMonitor {
                 let active = try? Data(contentsOf: assertions)
                 let metadata = active == nil ? nil : try? Data(contentsOf: configurations)
                 let stored = SystemFocusState.read(assertions: active, configurations: metadata)
-                let menu = stored == .unavailable ? Self.readMenuBar() : .unavailable
+                let menu = stored.mode == nil ? Self.readMenuBar() : .unavailable
                 DispatchQueue.main.async {
                     guard let self, self.enabled, requested == self.revision else { return }
-                    self.refreshMenuPeriodically(stored == .unavailable && AXIsProcessTrusted())
-                    if stored != .unavailable { self.publish(stored) }
-                    else if menu != .unavailable { self.publish(menu) }
-                    else { self.publish(self.eventState) }
+                    // Retry on permission changes even when System Settings keeps
+                    // focus and the accessory app never receives didBecomeActive.
+                    self.refreshMenuPeriodically(stored == .unavailable)
+                    self.publish(SystemFocusState.preferredState(store: stored, menu: menu, event: self.eventState))
                 }
             }
         }
@@ -150,40 +179,48 @@ final class SystemFocusMonitor {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
-    private static func readMenuBar() -> SystemFocusState {
-        guard AXIsProcessTrusted() else { return .unavailable }
+    static func readMenuBar() -> SystemFocusState {
+        guard AXIsProcessTrusted() else { return .needsAccessibility }
         func read(_ element: AXUIElement, _ key: String) -> CFTypeRef? {
             var value: CFTypeRef?
             return AXUIElementCopyAttributeValue(element, key as CFString, &value) == .success ? value : nil
         }
+        let focusIdentifiers = ["com.apple.menuextra.focusmode", "com.apple.menuextra.focusmodes", "com.apple.controlcenter.focusmodes"]
+        var budget = 120
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.8
         func search(_ element: AXUIElement, depth: Int) -> SystemFocusState {
-            if read(element, kAXIdentifierAttribute) as? String == "com.apple.menuextra.focusmode" {
-                return SystemFocusState.menuItemDescription(read(element, kAXDescriptionAttribute) as? String ?? "")
+            guard depth <= 5, budget > 0, ProcessInfo.processInfo.systemUptime < deadline else { return .unavailable }
+            budget -= 1
+            if let identifier = read(element, kAXIdentifierAttribute) as? String,
+               focusIdentifiers.contains(identifier.lowercased()) {
+                let labels = [kAXDescriptionAttribute, kAXTitleAttribute, kAXValueAttribute].compactMap { read(element, $0) as? String }
+                return SystemFocusState.menuItemState(labels: labels)
             }
-            guard depth < 2 else { return .unavailable }
-            for child in (read(element, kAXChildrenAttribute) as? [AXUIElement] ?? []).prefix(48) {
+            for child in (read(element, kAXChildrenAttribute) as? [AXUIElement] ?? []).prefix(36) {
                 let result = search(child, depth: depth + 1)
                 if result != .unavailable { return result }
             }
             return .unavailable
         }
-        for bundleID in ["com.apple.MenuBarAgent", "com.apple.controlcenter"] {
-            guard let process = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else { continue }
-            let app = AXUIElementCreateApplication(process.processIdentifier)
-            AXUIElementSetMessagingTimeout(app, 0.08)
-            if let bar = read(app, kAXExtrasMenuBarAttribute), CFGetTypeID(bar) == AXUIElementGetTypeID() {
-                let result = search(bar as! AXUIElement, depth: 0)
-                if result != .unavailable { return result }
+        for bundleID in ["com.apple.MenuBarAgent", "com.apple.controlcenter", "com.apple.systemuiserver"] {
+            for process in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID) {
+                let app = AXUIElementCreateApplication(process.processIdentifier)
+                AXUIElementSetMessagingTimeout(app, 0.08)
+                for attribute in [kAXExtrasMenuBarAttribute, kAXMenuBarAttribute] {
+                    guard let bar = read(app, attribute), CFGetTypeID(bar) == AXUIElementGetTypeID() else { continue }
+                    let result = search(bar as! AXUIElement, depth: 0)
+                    if result != .unavailable { return result }
+                }
             }
         }
-        return .unavailable
+        return .menuItemUnavailable
     }
 
     private func refreshMenuPeriodically(_ active: Bool) {
         if !active { menuRefresh?.invalidate(); menuRefresh = nil }
         else if menuRefresh == nil {
-            let timer = Timer(timeInterval: 12, repeats: true) { [weak self] _ in self?.refresh() }
-            timer.tolerance = 3
+            let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in self?.refresh() }
+            timer.tolerance = 1
             menuRefresh = timer
             RunLoop.main.add(timer, forMode: .common)
         }

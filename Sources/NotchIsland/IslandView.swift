@@ -100,7 +100,6 @@ final class ActionButton: NSButton {
     private var hovered = false
     private var tracking: NSTrackingArea?
     var selected = false { didSet { needsDisplay = true } }
-    var accent = NSColor.white
     var symbolSize: CGFloat = 14
     init(title: String = "", symbol: String? = nil, help: String, action: @escaping (NSView) -> Void) {
         super.init(frame: .zero)
@@ -135,6 +134,7 @@ final class ActionButton: NSButton {
     override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
     override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
     override func draw(_ dirtyRect: NSRect) {
+        let accent = LyricsAppearance.color(for: IslandPreferences.shared.accentRGB)
         let alpha: CGFloat = isHighlighted ? 0.17 : (selected ? 0.12 : (hovered ? 0.08 : 0))
         (selected ? accent.withAlphaComponent(alpha) : NSColor.white.withAlphaComponent(alpha)).setFill()
         NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: min(10, bounds.height / 2), yRadius: min(10, bounds.height / 2)).fill()
@@ -314,16 +314,29 @@ final class IslandView: NSView {
     var compactMediaVisible = false
     private var accessoryStyle = ""
     private var accessoryVisible: Bool?
-    private var compactLyricsLabel: PassiveLabel?
+    private var compactLyrics: CompactLyricsView?
+    private var compactLyricsVisible = false
+    private var compactLyricsHide: DispatchWorkItem?
+    private var lyricsAppearance = IslandPreferences.shared.lyricsAppearance
+    private var accentRGB = IslandPreferences.shared.accentRGB
     private var lyricTimer: Timer?
-    private var lyricCurrentLabel: NSTextField?
-    private var lyricNextLabel: NSTextField?
+    private var playerLyrics: LyricRollView?
+    private var lyricWrapper = LyricsWrapping()
+    private struct LyricTrack: Equatable {
+        let source: String
+        let id: String
+        let title: String
+        let artist: String
+    }
+    private var lyricTrack: LyricTrack?
 
     private var musicPanelWidth: CGFloat { max(360, notchWidth + 100) }
+    private var sideLyricsPanelWidth: CGFloat { lyricsAppearance.width + 36 }
     private var expandedLyricPosition: LyricsPlacement {
         guard let mediaInfo, !mediaInfo.lyrics.isEmpty else { return .hidden }
         let placement = IslandPreferences.shared.expandedLyricsPlacement
-        if placement == .side, let screen = IslandPreferences.shared.screen, screen.frame.width < musicPanelWidth + 240 {
+        if placement == .side, let screen = IslandPreferences.shared.screen,
+           screen.frame.width < musicPanelWidth + sideLyricsPanelWidth + 16 {
             return .below
         }
         return placement
@@ -390,11 +403,11 @@ final class IslandView: NSView {
     override var acceptsFirstResponder: Bool { true }
     private var top: CGFloat { bounds.maxY }
     var debugVisibleRect: CGRect { visualRect }
-    var onFootprintChange: (() -> Void)?
-    var occupiedScreenFrame: CGRect? {
-        guard let window else { return nil }
-        let moving = shape.presentation()?.path?.boundingBoxOfPath ?? visualRect
-        return window.convertToScreen(convert(visualRect.union(moving).union(notchRect), to: nil))
+    private var attachedNoticeLayout: NotchNotificationLayout {
+        let prefs = IslandPreferences.shared
+        let availableWidth = min(bounds.width, prefs.screen?.frame.width ?? bounds.width)
+        return NotchNotificationLayout(notch: notchWidth, available: availableWidth - 16,
+                                       width: prefs.notificationWidth, depth: prefs.notificationDepth)
     }
     var debugNotchRect: CGRect { notchRect }
     var debugWaveAnimating: Bool { equalizer?.isAnimating ?? false }
@@ -403,6 +416,26 @@ final class IslandView: NSView {
     var debugGlassClipBounds: CGRect? { backdrop.debugClipBounds }
     func applyAppearance() {
         updateBackdrop(rect: visualRect, previous: nil, spring: nil)
+        let lyrics = IslandPreferences.shared.lyricsAppearance
+        let accent = IslandPreferences.shared.accentRGB
+        if accent != accentRGB {
+            accentRGB = accent
+            func redrawButtons(_ parent: NSView) {
+                for child in parent.subviews {
+                    if child is ActionButton { child.needsDisplay = true }
+                    redrawButtons(child)
+                }
+            }
+            redrawButtons(body)
+        }
+        if lyrics != lyricsAppearance {
+            let widthChanged = lyrics.width != lyricsAppearance.width
+            lyricsAppearance = lyrics
+            if widthChanged, expanded, tab == .music { contentKey = ""; render(state, animated: false) }
+            else { refreshLyrics() }
+        }
+        compactLyrics?.rightBackground = IslandPreferences.shared.lyricsRightBackground
+        if case .notification = state { render(state) }
         let preview = IslandPreferences.shared.notificationPreview
         if notificationPreview != preview {
             notificationPreview = preview
@@ -477,7 +510,6 @@ final class IslandView: NSView {
         }
         visualRect = rect
         updateBackdrop(rect: rect, previous: previous, spring: motion)
-        onFootprintChange?()
     }
     func render(_ newState: IslandState, animated: Bool = true) {
         let previousTab = tab
@@ -493,18 +525,23 @@ final class IslandView: NSView {
             let secondary = selected == .audio || selected == .calendar || selected == .shortcuts || selected == .clipboard
             let position: LyricsPlacement = selected == .music && !isPreview ? expandedLyricPosition : .hidden
             height += isPreview ? 86 : (selected == .music ? 242 + (position == .below ? 62 : 0) : (secondary ? 326 : bodyHeight))
-            width = isPreview ? max(notchWidth + 90, 324) : (selected == .music ? musicPanelWidth + (position == .side ? 224 : 0) : panelWidth)
+            width = isPreview ? max(notchWidth + 90, 324) : (selected == .music ? musicPanelWidth + (position == .side ? sideLyricsPanelWidth : 0) : panelWidth)
             key = "panel-\(tab.rawValue)-\(isPreview)-\(visibleTabs.map(\.rawValue))-lyrics\(position.rawValue)"
         case .music(let info):
             mediaInfo = info; tab = .music; expanded = true
             let position = expandedLyricPosition
             height += 242 + (position == .below ? 62 : 0)
-            width = musicPanelWidth + (position == .side ? 224 : 0)
+            width = musicPanelWidth + (position == .side ? sideLyricsPanelWidth : 0)
             key = "panel-0-false-\(visibleTabs.map(\.rawValue))-lyrics\(position.rawValue)"
         case .volume: width = notchWidth + 236; key = "volume"
         case .brightness: width = notchWidth + 236; key = "brightness"
         case .airPods(let info): height += 226; width = max(notchWidth + 140, 390); key = "airpods-\(info.address)-\(info.connected)"
-        case .notification(let info): height += 154; width = max(notchWidth + 140, 400); key = "notification-\(info.identity)-\(showsNotificationPreview)"
+        case .notification(let info):
+            let attached = IslandPreferences.shared.notificationPlacement == .sides
+            let layout = attachedNoticeLayout
+            height += attached ? layout.depth : 154
+            width = attached ? layout.width : max(notchWidth + 140, 400)
+            key = "notification-\(info.identity)-\(showsNotificationPreview)-\(attached)-\(width)-\(height)"
         case .inputSource(let name): height += 78; width = max(notchWidth + 100, 340); key = "input-\(name)"
         case .charging(let connected, let percent): height += 78; width = max(notchWidth + 100, 340); key = "power-\(connected)-\(percent)"
         case .alarm(let text), .timerDone(let text): height += 148; width = max(notchWidth + 140, 368); key = "alert-\(text)"
@@ -557,7 +594,7 @@ final class IslandView: NSView {
             if h > 0 { body.subviews.forEach { $0.removeFromSuperview() } }
             airPodsCard = nil
             audioPanel = nil; calendarPanel = nil; quickPanel = nil; clipboardPanel = nil
-            titleLabel = nil; artistLabel = nil; elapsedLabel = nil; remainingLabel = nil; timerLabel = nil; timerStatus = nil; playButton = nil; seekSlider = nil; artworkView = nil; pauseButton = nil; minutesField = nil; lyricCurrentLabel = nil; lyricNextLabel = nil
+            titleLabel = nil; artistLabel = nil; elapsedLabel = nil; remainingLabel = nil; timerLabel = nil; timerStatus = nil; playButton = nil; seekSlider = nil; artworkView = nil; pauseButton = nil; minutesField = nil; playerLyrics = nil
             if expanded { preview ? buildPreview() : buildPanel() }
             else { buildTransient(newState) }
             if h > 0 && animated && !body.isHidden && !IslandPreferences.shared.reduceMotion {
@@ -647,21 +684,12 @@ final class IslandView: NSView {
         button(symbol: "forward.fill", help: "下一首", frame: NSRect(x: w / 2 + 44, y: 185, width: 44, height: 42)) { [weak self] _ in self?.onNext?() }.symbolSize = 22
         if position != .hidden {
             let side = position == .side
-            let x = side ? w + 4 : 28
-            let lineWidth = side ? body.bounds.width - x - 24 : w - 56
-            let current = label("", frame: NSRect(x: x, y: side ? 79 : 235, width: lineWidth, height: side ? 58 : 26), size: side ? 18 : 16, weight: .semibold)
-            let next = label("", frame: NSRect(x: x, y: side ? 145 : 264, width: lineWidth, height: side ? 44 : 20), size: side ? 13 : 12, color: .white.withAlphaComponent(0.5))
-            for field in [current, next] {
-                field.alignment = side ? .natural : .center
-                field.wantsLayer = true
-                if side {
-                    field.cell?.wraps = true
-                    field.lineBreakMode = .byWordWrapping
-                    field.maximumNumberOfLines = 2
-                }
-            }
-            lyricCurrentLabel = current
-            lyricNextLabel = next
+            let lineWidth = min(lyricsAppearance.width, side ? sideLyricsPanelWidth - 32 : w - 48)
+            let x = side ? w + 8 : (w - lineWidth) / 2
+            let lyrics = LyricRollView(frame: CGRect(x: x, y: side ? 88 : 239, width: lineWidth, height: side ? 100 : 49),
+                                       placement: side ? .side : .below)
+            body.addSubview(lyrics)
+            playerLyrics = lyrics
         }
     }
     @objc private func seekChanged(_ sender: NSSlider) {
@@ -692,14 +720,29 @@ final class IslandView: NSView {
         badge.update(focusState.mode ?? .resolve(identifier: "", name: "专注模式", symbol: "moon"), animated: activityVisible)
         let title = label(focusState.title, frame: NSRect(x: 24, y: 127, width: body.bounds.width - 48, height: 28), size: 20, weight: .semibold)
         title.alignment = .center
-        let waiting = focusState == .unavailable || focusState.mode == .resolve(identifier: "")
         let detail: String
-        if waiting { detail = "无法读取当前模式名称" }
-        else { detail = focusState.mode == nil ? "系统当前未开启专注模式" : "系统专注模式已开启" }
+        let command: String
+        let settings: String
+        switch focusState {
+        case .needsAccessibility:
+            detail = "在系统设置中允许灵动岛读取菜单栏"
+            command = "打开辅助功能设置"
+            settings = "com.apple.preference.security?Privacy_Accessibility"
+        case .menuItemUnavailable:
+            detail = "菜单栏暂未提供专注状态"
+            command = "打开菜单栏设置"
+            settings = "com.apple.ControlCenter-Settings.extension"
+        case .unavailable, .inactive, .active:
+            if focusState.mode == .resolve(identifier: "") { detail = "系统专注已开启 · 暂无模式名称" }
+            else if focusState == .unavailable { detail = "正在检查系统状态" }
+            else { detail = focusState.mode == nil ? "系统当前未开启专注模式" : "系统专注模式已开启" }
+            command = "专注模式设置"
+            settings = "com.apple.Focus-Settings.extension"
+        }
         label(detail, frame: NSRect(x: 16, y: 169, width: body.bounds.width - 32, height: 20), size: 12, color: .white.withAlphaComponent(0.58)).alignment = .center
-        let command = "专注模式设置"
-        button(command, symbol: "arrow.up.forward", help: command, frame: NSRect(x: mid - 78, y: 211, width: 156, height: 34)) { _ in
-            if let url = URL(string: "x-apple.systempreferences:com.apple.Focus-Settings.extension") { NSWorkspace.shared.open(url) }
+        button(command, symbol: "arrow.up.forward", help: command, frame: NSRect(x: mid - 96, y: 211, width: 192, height: 34)) { [weak self] _ in
+            if self?.focusState == .needsAccessibility { _ = MediaKeyInterceptor.requestTrust() }
+            if let url = URL(string: "x-apple.systempreferences:\(settings)") { NSWorkspace.shared.open(url) }
         }
     }
     func updateFocus(_ next: SystemFocusState) {
@@ -756,6 +799,10 @@ final class IslandView: NSView {
         }
     }
     private func buildNotification(_ info: IslandNotification) {
+        if IslandPreferences.shared.notificationPlacement == .sides {
+            buildAttachedNotification(info)
+            return
+        }
         let width = body.bounds.width
         let icon = PassiveImage(frame: NSRect(x: 24, y: 20, width: 30, height: 30))
         icon.image = info.icon ?? NSImage(systemSymbolName: "bell.badge.fill", accessibilityDescription: nil)
@@ -769,6 +816,24 @@ final class IslandView: NSView {
             button(info.actionTitle, symbol: "arrow.up.forward", help: info.actionTitle, frame: NSRect(x: width - 111, y: 118, width: 92, height: 27)) { [weak self] _ in open(); self?.onDismissActivity?() }.symbolSize = 10
         }
     }
+    private func buildAttachedNotification(_ info: IslandNotification) {
+        let width = body.bounds.width
+        let height = body.bounds.height
+        let trailing: CGFloat = info.openApplication == nil ? 20 : 45
+        let textWidth = max(0, width - 46 - trailing)
+        let title = showsNotificationPreview ? info.title : "收到一条新通知"
+        _ = label(title, frame: CGRect(x: 24, y: 1, width: textWidth, height: 20), size: 14, weight: .semibold)
+        let message = showsNotificationPreview ? info.body : "通知内容已隐藏"
+        let text = label(message, frame: CGRect(x: 24, y: 23, width: textWidth, height: max(17, height - 32)),
+                         size: 12, color: .white.withAlphaComponent(0.75))
+        text.maximumNumberOfLines = max(1, min(4, Int((height - 30) / 15)))
+        if let open = info.openApplication {
+            button(symbol: "arrow.up.forward", help: info.actionTitle,
+                   frame: CGRect(x: width - 47, y: max(4, (height - 26) / 2), width: 25, height: 26)) { [weak self] _ in
+                open(); self?.onDismissActivity?()
+            }.symbolSize = 11
+        }
+    }
     private func buildNotice(symbol: String, title: String, subtitle: String) {
         let icon = PassiveImage(frame: NSRect(x: 22, y: 20, width: 28, height: 28)); icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil); icon.contentTintColor = .white.withAlphaComponent(0.8); body.addSubview(icon)
         label(title, frame: NSRect(x: 66, y: 12, width: body.bounds.width - 88, height: 24), size: 16, weight: .semibold)
@@ -777,7 +842,12 @@ final class IslandView: NSView {
     private func renderAccessories(_ state: IslandState) {
         refreshLyrics()
         let style: String
-        switch state { case .volume: style = "volume"; case .brightness: style = "brightness"; default: style = "compact" }
+        switch state {
+        case .volume: style = "volume"
+        case .brightness: style = "brightness"
+        case .notification where IslandPreferences.shared.notificationPlacement == .sides: style = "attachedNotification"
+        default: style = "compact"
+        }
         if accessoryStyle != style {
             accessoryStyle = style
             accessoryVisible = nil; accessoryKey = ""
@@ -791,11 +861,15 @@ final class IslandView: NSView {
                 badge.isHidden = true; compactFocusBadge = badge; leftAccessory.addSubview(badge)
                 let wave = EqualizerView(frame: NSRect(x: 16, y: (notchHeight - 14) / 2, width: 24, height: 14))
                 equalizer = wave; rightAccessory.addSubview(wave)
-            } else {
+            } else if style != "attachedNotification" {
                 buildHUD(volume: style == "volume")
             }
         }
         centerLabel.isHidden = hasNotch; centerLabel.frame = notchRect.insetBy(dx: 6, dy: 7)
+        if style == "attachedNotification", case .notification(let info) = state {
+            renderAttachedNotificationHeader(info)
+            return
+        }
         if style != "compact" {
             leftAccessory.frame = CGRect(x: notchRect.minX - 118, y: notchRect.minY, width: 118, height: notchHeight)
             rightAccessory.frame = CGRect(x: notchRect.maxX, y: notchRect.minY, width: 118, height: notchHeight)
@@ -840,6 +914,31 @@ final class IslandView: NSView {
             }
         } else if !accessoryKey.isEmpty { rightAccessory.subviews.filter { $0 !== equalizer }.forEach { $0.removeFromSuperview() }; accessoryKey = "" }
         if !hasNotch { centerLabel.stringValue = "" }
+    }
+    private func renderAttachedNotificationHeader(_ info: IslandNotification) {
+        setAccessoryVisibility(true)
+        let shelfWidth = max(0, (visualRect.width - notchWidth) / 2)
+        leftAccessory.frame = CGRect(x: visualRect.minX, y: notchRect.minY, width: shelfWidth, height: notchHeight)
+        rightAccessory.frame = CGRect(x: notchRect.maxX, y: notchRect.minY, width: shelfWidth, height: notchHeight)
+        let key = "\(info.identity)-\(shelfWidth)"
+        guard accessoryKey != key else { return }
+        accessoryKey = key
+        leftAccessory.subviews.forEach { $0.removeFromSuperview() }; rightAccessory.subviews.forEach { $0.removeFromSuperview() }
+        let size = min(22, notchHeight - 8)
+        let icon = PassiveImage(frame: CGRect(x: max(8, (shelfWidth - size) / 2), y: (notchHeight - size) / 2,
+                                              width: size, height: size))
+        icon.image = info.icon ?? NSImage(systemSymbolName: "bell.fill", accessibilityDescription: nil)
+        icon.contentTintColor = .white
+        icon.wantsLayer = true
+        icon.layer?.cornerRadius = 5
+        icon.layer?.masksToBounds = true
+        leftAccessory.addSubview(icon)
+        let close = ActionButton(symbol: "xmark", help: "关闭通知") { [weak self] _ in self?.onDismissActivity?() }
+        close.symbolSize = 9
+        close.frame = CGRect(x: max(0, shelfWidth - 28), y: (notchHeight - 24) / 2, width: 23, height: 24)
+        rightAccessory.addSubview(close)
+        _ = label(info.source, frame: CGRect(x: 5, y: (notchHeight - 17) / 2, width: max(0, shelfWidth - 33), height: 17),
+                  size: 11, weight: .semibold, color: .white.withAlphaComponent(0.82), parent: rightAccessory)
     }
     private func setAccessoryVisibility(_ visible: Bool) {
         guard accessoryVisible != visible else { return }; accessoryVisible = visible
@@ -888,65 +987,128 @@ final class IslandView: NSView {
             pauseButton?.image = NSImage(systemSymbolName: session.isPaused ? "play.fill" : "pause.fill", accessibilityDescription: nil)
         }
     }
-    private func refreshLyrics() {
+    func playbackPositionDidChange(animated: Bool = false) {
+        refreshContent()
+        refreshLyrics(allowScroll: animated)
+    }
+    private func refreshLyrics(allowScroll: Bool = true) {
         let compact: Bool
         if case .idle = state {
             compact = compactMediaVisible && IslandPreferences.shared.lyricsPlacement != .hidden
         } else { compact = false }
-        let inPlayer = expanded && !preview && tab == .music && expandedLyricPosition != .hidden
-        if !compact { compactLyricsLabel?.isHidden = true }
-        guard activityVisible, compact || inPlayer, let info = mediaInfo, !info.lyrics.isEmpty else {
-            compactLyricsLabel?.isHidden = true
+        if !compact { hideCompactLyrics() }
+        guard activityVisible, compact || playerLyrics != nil, let info = mediaInfo, !info.lyrics.isEmpty else {
+            hideCompactLyrics()
+            playerLyrics?.reset()
             lyricTimer?.invalidate(); lyricTimer = nil
             return
         }
-        let pair = info.lyricLine()
-        if compact { updateCompactLyrics(pair.current?.text) }
-        if inPlayer {
-            setLyricText(pair.current?.text ?? "", on: lyricCurrentLabel)
-            setLyricText(pair.next?.text ?? "", on: lyricNextLabel)
+        let now = Date()
+        let elapsed = info.interpolated(at: now).elapsed
+        let style = IslandPreferences.shared.lyricsAnimation
+        let track = LyricTrack(source: info.source, id: info.trackID, title: info.title, artist: info.artist)
+        let animated = allowScroll && lyricTrack == track && info.isPlaying && !IslandPreferences.shared.reduceMotion
+        lyricTrack = track
+        let lyrics: LyricRollView?
+        if compact {
+            lyrics = prepareCompactLyrics(hasLine: true).roll
+        } else {
+            lyrics = playerLyrics
         }
-        guard info.isPlaying, let next = pair.next, next.time.isFinite,
-              info.duration <= 0 || next.time <= info.duration else {
+        let width: CGFloat = lyrics?.fittingWidth ?? CGFloat(lyricsAppearance.width)
+        let font = lyrics?.lyricFont(for: lyricsAppearance) ?? .systemFont(ofSize: lyricsAppearance.size, weight: lyricsAppearance.weight.fontWeight)
+        let wrapped = lyricWrapper.lines(for: info.lyrics, width: width, font: font, duration: info.duration)
+        let wrappedInfo = MediaInfo(isPlaying: info.isPlaying, duration: info.duration, elapsed: elapsed, sampledAt: now, lyrics: wrapped)
+        let pair = wrappedInfo.lyricLine(at: now)
+        if compact, pair.current == nil { hideCompactLyrics() }
+        lyrics?.update(current: pair.current, next: pair.next, elapsed: elapsed, style: style,
+                       appearance: lyricsAppearance, animated: animated)
+
+        let nextSegment: TimeInterval?
+        if style == .appleMusic {
+            nextSegment = pair.current?.segments.first(where: { $0.time > elapsed })?.time
+        } else {
+            nextSegment = nil
+        }
+        let nextLineTime = pair.next?.time ?? .infinity
+        let nextWordTime = nextSegment ?? .infinity
+        let nextChange = min(nextLineTime, nextWordTime)
+        guard info.isPlaying, nextChange.isFinite, info.duration <= 0 || nextChange <= info.duration else {
             lyricTimer?.invalidate(); lyricTimer = nil
             return
         }
-        let deadline = info.sampledAt.addingTimeInterval(next.time - info.elapsed)
-        if let timer = lyricTimer, timer.isValid, abs(timer.fireDate.timeIntervalSince(deadline)) < 0.015 { return }
+        let deadline = info.sampledAt.addingTimeInterval(nextChange - info.elapsed)
+        if let timer = lyricTimer, timer.isValid, abs(timer.fireDate.timeIntervalSince(deadline)) < 0.008 { return }
         lyricTimer?.invalidate()
-        let timer = Timer(fire: max(deadline, Date().addingTimeInterval(0.005)), interval: 0, repeats: false) { [weak self] _ in
+        let timer = Timer(fire: max(deadline, now.addingTimeInterval(0.003)), interval: 0, repeats: false) { [weak self] _ in
             self?.lyricTimer = nil
             self?.refreshLyrics()
         }
-        timer.tolerance = 0.02
+        timer.tolerance = style == .appleMusic ? 0.008 : 0.02
         lyricTimer = timer
         RunLoop.main.add(timer, forMode: .common)
     }
-    private func setLyricText(_ text: String, on field: NSTextField?) {
-        guard let field, field.stringValue != text else { return }
-        field.stringValue = text
-        if IslandPreferences.shared.lyricsAnimation == .appleMusic && !IslandPreferences.shared.reduceMotion {
-            let fade = CATransition()
-            fade.type = .fade; fade.duration = 0.22
-            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            field.layer?.add(fade, forKey: "lyricFade")
+
+    private func hideCompactLyrics() {
+        setCompactLyricsVisible(false)
+    }
+    private func setCompactLyricsVisible(_ visible: Bool) {
+        guard let lyrics = compactLyrics, let layer = lyrics.layer else { return }
+        let moving = activityVisible && !IslandPreferences.shared.reduceMotion
+        if visible == compactLyricsVisible {
+            if !visible && !moving { lyrics.isHidden = true; layer.removeAnimation(forKey: "lyricVisibility") }
+            return
+        }
+        compactLyricsVisible = visible
+        compactLyricsHide?.cancel()
+        if !visible { lyrics.roll.reset() }
+        let prior = lyrics.isHidden ? 0 : (layer.presentation()?.opacity ?? layer.opacity)
+        let target: Float = visible ? 1 : 0
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        layer.opacity = target
+        CATransaction.commit()
+        layer.removeAnimation(forKey: "lyricVisibility")
+        if visible { lyrics.isHidden = false }
+        if moving {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = prior; fade.toValue = target
+            fade.duration = visible ? 0.25 : 0.18
+            fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.add(fade, forKey: "lyricVisibility")
+        }
+        if !visible {
+            let hide = DispatchWorkItem { [weak lyrics] in lyrics?.isHidden = true }
+            compactLyricsHide = hide
+            if moving { DispatchQueue.main.asyncAfter(deadline: .now() + 0.19, execute: hide) }
+            else { hide.perform() }
         }
     }
-    private func updateCompactLyrics(_ text: String?) {
-        guard let text else { compactLyricsLabel?.isHidden = true; return }
-        if compactLyricsLabel == nil {
-            let field = PassiveLabel(labelWithString: ""); field.alignment = .center; field.font = .systemFont(ofSize: 11, weight: .medium); field.textColor = .white.withAlphaComponent(0.9); field.lineBreakMode = .byTruncatingTail; field.wantsLayer = true; field.layer?.cornerRadius = 8; field.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.78).cgColor; field.layer?.borderWidth = 0.5; field.layer?.borderColor = NSColor.white.withAlphaComponent(0.1).cgColor; addSubview(field); compactLyricsLabel = field
+    private func prepareCompactLyrics(hasLine: Bool) -> CompactLyricsView {
+        let lyrics: CompactLyricsView
+        if let existing = compactLyrics { lyrics = existing }
+        else {
+            lyrics = CompactLyricsView(frame: .zero)
+            lyrics.isHidden = true
+            addSubview(lyrics, positioned: .below, relativeTo: content)
+            compactLyrics = lyrics
         }
-        guard let field = compactLyricsLabel else { return }
-        field.isHidden = false
-        if IslandPreferences.shared.lyricsPlacement == .below {
-            field.frame = NSRect(x: bounds.midX - 180, y: notchRect.minY - 25, width: 360, height: 20)
+        let position = IslandPreferences.shared.lyricsPlacement
+        lyrics.placement = position
+        lyrics.lyricAppearance = lyricsAppearance
+        lyrics.rightBackground = IslandPreferences.shared.lyricsRightBackground
+        let frame: CGRect
+        if position == .below {
+            frame = CGRect(x: visualRect.minX, y: notchRect.minY - 20,
+                           width: visualRect.width, height: notchHeight + 20)
         } else {
-            let rightEdge = visualRect.minX - 5
-            let width = min(214, max(0, rightEdge - bounds.minX - 2))
-            field.frame = NSRect(x: rightEdge - width, y: notchRect.midY - 10, width: width, height: 20)
+            let availableWidth = min(bounds.width, IslandPreferences.shared.screen?.frame.width ?? bounds.width)
+            let extensionWidth = min(lyricsAppearance.width + 24, max(0, (availableWidth - visualRect.width) / 2 - 4))
+            lyrics.sideExtension = extensionWidth
+            frame = visualRect.insetBy(dx: -extensionWidth, dy: 0)
         }
-        setLyricText(text, on: field)
+        if lyrics.frame != frame { lyrics.frame = frame }
+        setCompactLyricsVisible(hasLine)
+        return lyrics
     }
     func refreshCompact() { render(state) }
     func refreshFiles() { guard expanded && tab == .files && !preview else { return }; contentKey = ""; render(state, animated: false) }

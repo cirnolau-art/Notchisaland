@@ -23,7 +23,11 @@ enum SnapshotMode {
         clipboard.onChange = { [weak view] in view?.refreshClipboard() }
         let artwork = makeArtwork()
         var music = MediaInfo(title: "夜空中最亮的星", artist: "逃跑计划 · 世界", artwork: artwork, isPlaying: true, duration: 254, elapsed: 86, source: "Music", trackID: "sample")
-        music.lyrics = [LyricLine(time: 0, text: "穿过旷野的风"), LyricLine(time: 84, text: "你慢慢地走来"), LyricLine(time: 180, text: "把星光放在手心")]
+        let timedLine = "你慢慢地走来".enumerated().map {
+            LyricSegment(time: 84 + Double($0.offset) * 1.3, text: String($0.element))
+        }
+        music.lyrics = [LyricLine(time: 0, text: "穿过旷野的风"), LyricLine(time: 84, text: "你慢慢地走来", segments: timedLine),
+                        LyricLine(time: 180, text: "把星光放在手心")]
         IslandPreferences.shared.lyricsPlacement = .below
         IslandPreferences.shared.lyricsAnimation = .appleMusic
         view.mediaInfo = music
@@ -37,6 +41,9 @@ enum SnapshotMode {
             ("03-music", .music(music)),
             ("48-player-side-lyrics", .music(music)),
             ("49-compact-side-lyrics", .idle(.music(music.title, artwork, nil, true))),
+            ("54-custom-side-lyrics", .idle(.music(music.title, artwork, nil, true))),
+            ("53-lyrics-efficient", .music(music)),
+            ("55-attached-notification", .notification(.demo)),
             ("50-system-focus", .workspace(.focus, false)),
             ("51-compact-focus", .idle(.time(""))),
             ("52-system-focus-off", .workspace(.focus, false)),
@@ -94,7 +101,24 @@ enum SnapshotMode {
             view.updateFocus(["50-system-focus", "51-compact-focus"].contains(name)
                              ? .active(.resolve(identifier: "com.apple.focus.reduce-interruptions")) : .inactive)
             IslandPreferences.shared.expandedLyricsPlacement = name == "48-player-side-lyrics" ? .side : .below
-            IslandPreferences.shared.lyricsPlacement = name == "49-compact-side-lyrics" ? .side : .below
+            let customLyrics = name == "54-custom-side-lyrics"
+            IslandPreferences.shared.lyricsPlacement = (name == "49-compact-side-lyrics" || customLyrics) ? .side : .below
+            IslandPreferences.shared.lyricsAnimation = name == "53-lyrics-efficient" ? .efficient : .appleMusic
+            IslandPreferences.shared.notificationPlacement = name == "55-attached-notification" ? .sides : .island
+            IslandPreferences.shared.notificationPreview = !name.contains("private")
+            IslandPreferences.shared.notificationWidth = name == "55-attached-notification" ? 470 : NotchNotificationLayout.defaultWidth
+            IslandPreferences.shared.notificationDepth = name == "55-attached-notification" ? 82 : NotchNotificationLayout.defaultDepth
+            var lyricsAppearance = LyricsAppearance()
+            if customLyrics {
+                lyricsAppearance.width = 258
+                lyricsAppearance.opacity = 0.64
+                lyricsAppearance.size = 15
+                lyricsAppearance.weight = .bold
+                lyricsAppearance.colorRGB = 0x92DFDF
+                lyricsAppearance.glow = 0.85
+            }
+            IslandPreferences.shared.lyricsAppearance = lyricsAppearance
+            view.applyAppearance()
             if name == "42-clipboard" {
                 for text in ["https://developer.apple.com", "把常用的内容，放在顺手的位置。", "周末计划\n散步、咖啡，然后好好休息。"] {
                     board.clearContents(); board.setString(text, forType: .string); clipboard.capture()
@@ -110,6 +134,7 @@ enum SnapshotMode {
             if name == "08-timer-paused" { var paused = session; paused.pause(); view.timerSession = paused; view.refreshTimer() }
             if name == "09-volume" { view.timerSession = nil }
             var info = music
+            info.sampledAt = Date()
             if name.hasPrefix("16-") || name.hasPrefix("17-") || name.hasPrefix("18-") { info.isPlaying = false }
             view.mediaInfo = info
             view.compactMediaVisible = !name.contains("retracted")
@@ -121,7 +146,8 @@ enum SnapshotMode {
             view.calendarEnabled = !name.contains("permission"); view.calendarAuthorized = !name.contains("permission")
             view.calendarStatus = name.contains("permission") ? "开启后，只读取你的日历" : "已连接系统日历"
             view.quickActions = [IslandQuickAction(title: "下载", kind: .folder, target: "/tmp"), IslandQuickAction(title: "文稿", kind: .folder, target: "/tmp"), IslandQuickAction(title: "系统设置", kind: .application, target: "/System/Applications/System Settings.app"), IslandQuickAction(title: "开始工作", kind: .shortcut, target: "demo"), IslandQuickAction(title: "备忘录", kind: .application, target: "/System/Applications/Notes.app"), IslandQuickAction(title: "今日计划", kind: .shortcut, target: "demo")]
-            view.render(state)
+            if case .music(let sample) = state, !sample.title.isEmpty { view.render(.music(info)) }
+            else { view.render(state) }
             view.applyAppearance()
             view.refreshConnectedPanels()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) { save(view: view, name: name); step() }
@@ -157,20 +183,66 @@ enum SnapshotMode {
         func descendants(_ root: NSView) -> [NSView] { root.subviews.flatMap { [$0] + descendants($0) } }
         view.enabledTabsOverride = IslandTab.allCases
         var lyricSample = MediaInfo(title: "时间轴", isPlaying: true, duration: 45, elapsed: 15)
-        lyricSample.lyrics = [.init(time: 0, text: "第一行"), .init(time: 15.15, text: "第二行")]
+        lyricSample.lyrics = [.init(time: 0, text: "第一行"), .init(time: 15.18, text: "第二行")]
+        IslandPreferences.shared.lyricsAnimation = .efficient
+        IslandPreferences.shared.gentleMotion = false
         view.mediaInfo = lyricSample; view.compactMediaVisible = true
         view.render(.idle(.time("")), animated: false)
         func hasVisibleLine(_ text: String) -> Bool {
             descendants(view).compactMap { $0 as? NSTextField }.contains { $0.stringValue == text && !$0.isHiddenOrHasHiddenAncestor }
         }
         check(hasVisibleLine("第一行"), "Compact lyric did not follow the playback sample")
-        RunLoop.main.run(until: Date().addingTimeInterval(0.35))
+        IslandPreferences.shared.lyricsPlacement = .side
+        view.refreshCompact()
+        if let strip = descendants(view).compactMap({ $0 as? CompactLyricsView }).first {
+            check(strip.frame.midX == view.debugVisibleRect.midX, "Side lyric wings are not symmetrical")
+            let originalWidth = strip.sideExtension
+            var customAppearance = LyricsAppearance()
+            customAppearance.width = 136; customAppearance.glow = 0.8; customAppearance.colorRGB = 0x92DFDF
+            IslandPreferences.shared.lyricsAppearance = customAppearance
+            view.applyAppearance()
+            check(strip.sideExtension < originalWidth && strip.frame.midX == view.debugVisibleRect.midX, "Side width changes moved the notch")
+            let currentField = descendants(strip).compactMap { $0 as? NSTextField }.first { $0.stringValue == "第一行" }
+            let attributes = currentField?.attributedStringValue.attributes(at: 0, effectiveRange: nil)
+            check(attributes?[.shadow] is NSShadow, "Lyric glow not applied")
+        } else { failures.append("Side lyric view missing") }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.24))
         check(hasVisibleLine("第二行"), "Compact lyric missed the next timestamp without a player refresh")
+        let roll = descendants(view).compactMap { $0 as? LyricRollView }.first
+        check(roll?.hasScrollAnimation == true || IslandPreferences.shared.reduceMotion, "Efficient lyric mode did not scroll")
         view.render(.notification(.demo), animated: false)
         check(!hasVisibleLine("第二行"), "Compact lyric obscures the notification")
         view.render(.idle(.time("")), animated: false)
         view.compactMediaVisible = false; view.refreshCompact()
         check(!hasVisibleLine("第二行"), "Compact lyric did not retract after playback")
+        lyricSample.elapsed = 15
+        lyricSample.lyrics = [.init(time: 0, text: "第一行"),
+                              .init(time: 15.18, text: "星光", segments: [.init(time: 15.18, text: "星"), .init(time: 16, text: "光")])]
+        lyricSample.sampledAt = Date()
+        IslandPreferences.shared.lyricsAnimation = .appleMusic
+        view.mediaInfo = lyricSample
+        view.render(.workspace(.music, false), animated: false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
+        lyricSample.elapsed = 15.3
+        lyricSample.sampledAt = Date()
+        view.mediaInfo = lyricSample
+        view.playbackPositionDidChange(animated: true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.04))
+        let playerRoll = descendants(view).compactMap { $0 as? LyricRollView }.first { !$0.isCompact && !$0.isHiddenOrHasHiddenAncestor }
+        check(playerRoll?.hasScrollAnimation == true || IslandPreferences.shared.reduceMotion, "Apple Music lyric mode did not scroll")
+        func colors(in text: String) -> [CGFloat] {
+            guard let field = descendants(view).compactMap({ $0 as? NSTextField }).first(where: { $0.stringValue == text && !$0.isHiddenOrHasHiddenAncestor }) else { return [] }
+            return (0..<field.attributedStringValue.length).compactMap {
+                (field.attributedStringValue.attribute(.foregroundColor, at: $0, effectiveRange: nil) as? NSColor)?.alphaComponent
+            }
+        }
+        let karaokeColors = colors(in: "星光")
+        check(karaokeColors.count == 2 && karaokeColors[0] > karaokeColors[1], "Word timing did not highlight only the active segment")
+        IslandPreferences.shared.lyricsAnimation = .efficient
+        view.refreshCompact()
+        let efficientColors = colors(in: "星光")
+        check(efficientColors.count == 2 && efficientColors.allSatisfy { $0 > 0.9 }, "Efficient mode keeps per-word highlighting enabled")
+        IslandPreferences.shared.lyricsAnimation = .appleMusic
         view.notificationPreviewOverride = nil
         view.backdropOverride = .init(style: .black, blur: 0.75, opacity: 0.58)
         var selected: IslandTab?
