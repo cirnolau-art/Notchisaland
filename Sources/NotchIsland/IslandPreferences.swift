@@ -25,10 +25,45 @@ final class IslandPreferences {
     var inputHUDEnabled: Bool { get { defaults.object(forKey: "notchisland.inputHUDEnabled") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.inputHUDEnabled"); changed() } }
     var powerHUDEnabled: Bool { get { defaults.object(forKey: "notchisland.powerHUDEnabled") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.powerHUDEnabled"); changed() } }
     var calendarEnabled: Bool { get { defaults.bool(forKey: "notchisland.calendarEnabled") } set { defaults.set(newValue, forKey: "notchisland.calendarEnabled"); changed() } }
-    var backgroundStyle: IslandBackgroundStyle { get { IslandBackgroundStyle(rawValue: defaults.integer(forKey: "notchisland.backgroundStyle")) ?? .black } set { defaults.set(newValue.rawValue, forKey: "notchisland.backgroundStyle"); changed() } }
-    var glassBlur: Double { get { defaults.object(forKey: "notchisland.glassBlur") as? Double ?? IslandBackdropConfiguration.defaultFrost } set { defaults.set(min(1, max(0, newValue)), forKey: "notchisland.glassBlur"); changed() } }
-    var glassOpacity: Double { get { defaults.object(forKey: "notchisland.glassOpacity") as? Double ?? IslandBackdropConfiguration.defaultDarkening } set { defaults.set(min(1, max(0, newValue)), forKey: "notchisland.glassOpacity"); changed() } }
-    var glassRimStrength: Double { get { defaults.object(forKey: "notchisland.glassRimStrength") as? Double ?? IslandBackdropConfiguration.defaultRim } set { defaults.set(min(1, max(0, newValue)), forKey: "notchisland.glassRimStrength"); changed() } }
+    var backgroundStyle: IslandBackgroundStyle {
+        get { IslandBackgroundStyle(rawValue: defaults.integer(forKey: "notchisland.backgroundStyle")) ?? .black }
+        set {
+            guard backgroundStyle != newValue else { return }
+            defaults.set(newValue.rawValue, forKey: "notchisland.backgroundStyle")
+            appearanceChanged()
+        }
+    }
+    var glassMaterial: IslandGlassMaterial {
+        get { IslandGlassMaterial(rawValue: defaults.integer(forKey: "notchisland.glassMaterial")) ?? .regular }
+        set {
+            guard newValue != glassMaterial else { return }
+            defaults.set(newValue.rawValue, forKey: "notchisland.glassMaterial")
+            appearanceChanged()
+        }
+    }
+    var glassGradientEnabled: Bool {
+        get { defaults.object(forKey: "notchisland.glassGradientEnabled") as? Bool ?? true }
+        set {
+            guard glassGradientEnabled != newValue else { return }
+            defaults.set(newValue, forKey: "notchisland.glassGradientEnabled")
+            appearanceChanged()
+        }
+    }
+    var glassOpacity: Double {
+        get { defaults.object(forKey: "notchisland.glassOpacity") as? Double ?? IslandBackdropConfiguration.defaultDarkening }
+        set { setGlassValue(newValue, current: glassOpacity, key: "notchisland.glassOpacity") }
+    }
+    var glassRimStrength: Double {
+        get { defaults.object(forKey: "notchisland.glassRimStrength") as? Double ?? IslandBackdropConfiguration.defaultRim }
+        set { setGlassValue(newValue, current: glassRimStrength, key: "notchisland.glassRimStrength") }
+    }
+    private func setGlassValue(_ value: Double, current: Double, key: String) {
+        guard value.isFinite else { return }
+        let clamped = min(1, max(0, value))
+        guard clamped != current else { return }
+        defaults.set(clamped, forKey: key)
+        appearanceChanged()
+    }
     var airPodsEnabled: Bool { get { defaults.object(forKey: "notchisland.airPodsEnabled") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.airPodsEnabled"); changed() } }
     var notificationsEnabled: Bool { get { defaults.object(forKey: "notchisland.notificationsEnabled") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.notificationsEnabled"); changed() } }
     var notificationPreview: Bool { get { defaults.object(forKey: "notchisland.notificationPreview") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.notificationPreview"); changed() } }

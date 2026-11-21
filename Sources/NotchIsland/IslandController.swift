@@ -86,7 +86,11 @@ final class IslandController: NSObject {
         observe(.islandPreferencesChanged, center: .default) { [weak self] in self?.applyPreferences() }
         observe(.islandAppearanceChanged, center: .default) { [weak self] in self?.islandView.applyAppearance() }
         observe(NSApplication.didBecomeActiveNotification, center: .default) { [weak self] in self?.window.reposition(); self?.focusMonitor.refresh() }
-        observe(NSApplication.didChangeScreenParametersNotification, center: .default) { [weak self] in self?.window.reposition(); self?.updateEnvironment() }
+        observe(NSApplication.didChangeScreenParametersNotification, center: .default) { [weak self] in self?.updateEnvironment() }
+        observe(NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, center: NSWorkspace.shared.notificationCenter) { [weak self] in
+            self?.islandView.refreshCompact()
+            self?.islandView.applyAppearance()
+        }
         observe(NSWorkspace.didActivateApplicationNotification, center: NSWorkspace.shared.notificationCenter) { [weak self] in self?.updateEnvironment() }
         observe(NSWorkspace.activeSpaceDidChangeNotification, center: NSWorkspace.shared.notificationCenter) { [weak self] in self?.updateEnvironment() }
         observe(NSWorkspace.didWakeNotification, center: NSWorkspace.shared.notificationCenter) { [weak self] in self?.window.reposition(); self?.musicApp.refresh(); self?.airPods.didWake(); self?.focusMonitor.didWake(); self?.updateEnvironment() }
@@ -119,6 +123,10 @@ final class IslandController: NSObject {
     }
     func startDebug() { isDebug = true; window.reposition(); islandView.shelf = fileShelf; window.orderFrontRegardless(); renderUnderlying() }
     func debugPresent(_ state: IslandState) { currentState = state; islandView.timerSession = alarmManager.session; islandView.render(state) }
+    func debugAcceptPlaybackSample(_ info: MediaInfo?) {
+        guard isDebug else { return }
+        musicApp.onInfo?(info)
+    }
     private func setupCallbacks() {
         lyricsLookup.onChange = { [weak self] lines in
             guard let self, self.nowPlayingInfo?.lyrics != lines else { return }
@@ -199,9 +207,15 @@ final class IslandController: NSObject {
         musicApp.onStatus = { [weak self] status in self?.musicAppStatus = status }
         nowPlaying.onStateChange = { [weak self] info in self?.fallbackInfo = info; self?.selectMedia() }
         alarmManager.onTimerTick = { [weak self] _ in
-            guard let self else { return }; self.islandView.timerSession = IslandPreferences.shared.isEnabled(.timer) ? self.alarmManager.session : nil
+            guard let self else { return }
+            let session = IslandPreferences.shared.isEnabled(.timer) ? self.alarmManager.session : nil
+            let changedPresence = (self.islandView.timerSession == nil) != (session == nil)
+            self.islandView.timerSession = session
+            if changedPresence, self.policy.surface == .idle, !self.policy.transientVisible {
+                self.renderUnderlying()
+                return
+            }
             self.islandView.refreshTimer()
-            if case .idle = self.policy.surface, !self.policy.transientVisible { self.renderUnderlying() }
         }
         alarmManager.onAlarmFired = { [weak self] title in self?.showAlert(.alarm(title)) }
         alarmManager.onTimerFired = { [weak self] title in self?.showAlert(.timerDone(title)) }
@@ -398,7 +412,7 @@ final class IslandController: NSObject {
             else { currentState = .idle(.time(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short))) }
         }
         islandView.render(currentState)
-        musicApp.setExpanded({ if case .panel(.music) = policy.surface { return !hoveringPreview }; return false }())
+        musicApp.setExpanded(policy.surface == .panel(.music) && !hoveringPreview)
         updateVisibility(); updateWorkTimers()
     }
     func showPanel(_ tab: IslandTab? = nil) {
@@ -474,8 +488,9 @@ final class IslandController: NSObject {
         window.reposition()
         let front = NSWorkspace.shared.frontmostApplication
         suppressed = front?.bundleIdentifier.map { IslandPreferences.shared.excludedApps.contains($0) } ?? false
+        let mode = IslandPreferences.shared.fullscreenMode
         var fullscreen = false
-        if let pid = front?.processIdentifier,
+        if mode != 0, !suppressed, let pid = front?.processIdentifier,
            let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
             for window in windows where (window[kCGWindowOwnerPID as String] as? Int32) == pid && (window[kCGWindowLayer as String] as? Int) == 0 {
                 guard let raw = window[kCGWindowBounds as String] as? [String: Any], let bounds = CGRect(dictionaryRepresentation: raw as CFDictionary) else { continue }
@@ -485,7 +500,6 @@ final class IslandController: NSObject {
                 if converted.intersection(screen.frame).width >= screen.frame.width - 2 && converted.intersection(screen.frame).height >= screen.frame.height - 2 { fullscreen = true; break }
             }
         }
-        let mode = IslandPreferences.shared.fullscreenMode
         let previousCompact = compactOnly
         compactOnly = fullscreen && mode == 1
         if fullscreen && mode == 2 { suppressed = true }

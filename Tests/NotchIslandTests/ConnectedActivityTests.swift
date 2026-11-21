@@ -88,14 +88,16 @@ final class ConnectedActivityTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: name) }
         let preferences = IslandPreferences(defaults: defaults)
         XCTAssertEqual(preferences.backgroundStyle, .black)
-        preferences.glassBlur = 0.25; preferences.glassOpacity = 0.65
+        XCTAssertEqual(preferences.glassMaterial, .regular)
+        preferences.glassMaterial = .clear; preferences.glassOpacity = 0.65
         preferences.backgroundStyle = .glass; preferences.backgroundStyle = .black
-        XCTAssertEqual(preferences.glassBlur, 0.25); XCTAssertEqual(preferences.glassOpacity, 0.65)
+        XCTAssertEqual(preferences.glassMaterial, .clear); XCTAssertEqual(preferences.glassOpacity, 0.65)
         preferences.glassOpacity = 0.1
-        XCTAssertEqual(preferences.glassBlur, 0.25)
+        XCTAssertEqual(preferences.glassMaterial, .clear)
         let restored = IslandPreferences(defaults: defaults)
         XCTAssertEqual(restored.glassOpacity, 0.1)
-        preferences.glassBlur = 3; preferences.glassOpacity = -1
-        XCTAssertEqual(preferences.glassBlur, 1); XCTAssertEqual(preferences.glassOpacity, 0)
+        XCTAssertEqual(restored.glassMaterial, .clear)
+        preferences.glassOpacity = -1
+        XCTAssertEqual(preferences.glassOpacity, 0)
     }
 }

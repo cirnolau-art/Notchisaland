@@ -31,6 +31,26 @@ struct LyricsAppearance: Codable, Equatable {
     var weight = Weight.semibold
     var colorRGB: UInt32 = 0xFFFFFF
     var glow = 0.0
+    var hdrEnabled = false
+    var hdrStrength = 0.35
+
+    init() {}
+    private enum CodingKeys: String, CodingKey {
+        case width, opacity, size, weight, colorRGB, glow, hdrEnabled, hdrStrength
+    }
+    init(from decoder: Decoder) throws {
+        self.init()
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        width = try c.decodeIfPresent(Double.self, forKey: .width) ?? width
+        opacity = try c.decodeIfPresent(Double.self, forKey: .opacity) ?? opacity
+        size = try c.decodeIfPresent(Double.self, forKey: .size) ?? size
+        weight = try c.decodeIfPresent(Weight.self, forKey: .weight) ?? weight
+        colorRGB = try c.decodeIfPresent(UInt32.self, forKey: .colorRGB) ?? colorRGB
+        glow = try c.decodeIfPresent(Double.self, forKey: .glow) ?? glow
+        hdrEnabled = try c.decodeIfPresent(Bool.self, forKey: .hdrEnabled) ?? false
+        hdrStrength = try c.decodeIfPresent(Double.self, forKey: .hdrStrength) ?? hdrStrength
+        self = normalized()
+    }
 
     var color: NSColor { Self.color(for: colorRGB) }
 
@@ -55,6 +75,7 @@ struct LyricsAppearance: Codable, Equatable {
         value.size = clamp(size, in: Self.fontSizeRange, default: defaults.size)
         value.opacity = clamp(opacity, in: 0...1, default: defaults.opacity)
         value.glow = clamp(glow, in: 0...1, default: defaults.glow)
+        value.hdrStrength = clamp(hdrStrength, in: 0...1, default: defaults.hdrStrength)
         value.colorRGB &= 0xFFFFFF
         return value
     }

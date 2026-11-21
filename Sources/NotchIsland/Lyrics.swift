@@ -187,6 +187,20 @@ extension MediaInfo {
         let elapsed = interpolated(at: date).elapsed
         let index = lyrics.lastIndex(where: { $0.time <= elapsed })
         guard let index else { return (nil, lyrics.first) }
-        return (lyrics[index], lyrics.indices.contains(index + 1) ? lyrics[index + 1] : nil)
+        let next = lyrics.indices.contains(index + 1) ? lyrics[index + 1] : nil
+        let current = lyrics[index]
+        if let end = current.hideTime(next: next?.time, duration: duration), elapsed >= end { return (nil, next) }
+        return (current, next)
+    }
+}
+
+extension LyricLine {
+    /// Only explicit source timing can identify an instrumental gap in an LRC line.
+    func hideTime(next: TimeInterval?, duration: TimeInterval) -> TimeInterval? {
+        var result: TimeInterval? = duration > 0 ? duration : nil
+        if let end = segments.last?.endTime, next == nil || next! > end + 2 {
+            result = min(result ?? .infinity, end + 1)
+        }
+        return result
     }
 }

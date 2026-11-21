@@ -1,6 +1,6 @@
 import AppKit
 
-/// Query both players before selecting one; keep all scripting and caches on one serial queue.
+/// Display player events immediately, with scripting used for precise position, art and controls.
 final class MusicAppMonitor {
     var onInfo: ((MediaInfo?) -> Void)?
     var onStatus: ((String) -> Void)?
@@ -13,14 +13,14 @@ final class MusicAppMonitor {
     private var pendingArtwork = Set<String>()
     private var artworkAttempts = [String: Date]()
     private var deniedApps = Set<String>()
-    private var lastActive = ""
+    private var playback = MusicPlaybackState()
+    private var issues: [String] = []
     var hasActiveApp: Bool { !activeAppName.isEmpty }
     private var expanded = false
     private var playing = false
     private var workspaceObservers: [NSObjectProtocol] = []
     private var refreshQueued = false
     private var observers: [NSObjectProtocol] = []
-    private var previousPlaying = [String: Bool]()
 
     private var enabled = false
     private var generation = 0
@@ -32,16 +32,37 @@ final class MusicAppMonitor {
             timer?.invalidate(); timer = nil; expanded = false; refreshQueued = false
             workspaceObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }; workspaceObservers.removeAll()
             observers.forEach { DistributedNotificationCenter.default().removeObserver($0) }; observers.removeAll()
+            playback = MusicPlaybackState()
+            issues.removeAll()
+            activeAppName = ""
+            playing = false
             onInfo?(nil)
         }
     }
     func start() {
         guard observers.isEmpty else { return }; enabled = true
-        for name in ["com.apple.Music.playerInfo", "com.apple.iTunes.playerInfo", "com.spotify.client.PlaybackStateChanged"] {
-            observers.append(DistributedNotificationCenter.default().addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in self?.query() })
+        for (name, app) in [("com.apple.Music.playerInfo", "Music"), ("com.apple.iTunes.playerInfo", "Music"),
+                            ("com.spotify.client.PlaybackStateChanged", "Spotify")] {
+            observers.append(DistributedNotificationCenter.default().addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] note in
+                guard let self, self.enabled,
+                      !NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleID(app)).isEmpty else { return }
+                if let event = MusicPlaybackEvent(userInfo: note.userInfo), self.playback.apply(event, from: app) {
+                    self.publish()
+                }
+                self.query()
+            })
         }
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
-            workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.query() })
+            workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                guard let self,
+                      let application = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                      let app = MusicPlaybackState.apps.first(where: { Self.bundleID($0) == application.bundleIdentifier }) else { return }
+                if name == NSWorkspace.didTerminateApplicationNotification {
+                    self.playback.apply(.stopped, from: app)
+                    self.publish()
+                }
+                self.query()
+            })
         }
         schedule(); query()
     }
@@ -60,38 +81,72 @@ final class MusicAppMonitor {
         guard enabled else { return }
         guard !inFlight else { refreshQueued = true; return }
         let generation = self.generation
+        let revision = playback.revision
         inFlight = true
-        let running = ["Music", "Spotify"].filter { !NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleID($0)).isEmpty }
+        let running = Set(MusicPlaybackState.apps.filter { !NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleID($0)).isEmpty })
         queue.async { [weak self] in
             guard let self else { return }
-            var candidates = [MediaInfo]()
+            var readings: [String: MediaInfo?] = [:]
             var issues = [String]()
-            for app in running {
+            for app in MusicPlaybackState.apps {
+                guard running.contains(app) else {
+                    readings.updateValue(nil, forKey: app)
+                    continue
+                }
                 if self.deniedApps.contains(app) { issues.append("\(app)：需要自动化权限"); continue }
-                if let info = self.fetch(app: app, issues: &issues) { candidates.append(info) }
+                let issueCount = issues.count
+                let info = self.fetch(app: app, issues: &issues)
+                if issues.count == issueCount { readings.updateValue(info, forKey: app) }
             }
-            if let justStarted = candidates.first(where: { $0.isPlaying && self.previousPlaying[$0.source] != true }) { self.lastActive = justStarted.source }
-            self.previousPlaying = Dictionary(uniqueKeysWithValues: candidates.map { ($0.source, $0.isPlaying) })
-            let selected = MediaSourcePolicy.select(candidates, lastActive: self.lastActive)
-            if let selected { self.lastActive = selected.source }
-            let status = issues.isEmpty ? (selected.map { "\($0.source) · \($0.isPlaying ? "播放中" : "已暂停")" } ?? "等待 Music 或 Spotify 播放") : issues.joined(separator: "；")
             DispatchQueue.main.async {
                 self.inFlight = false
                 guard self.enabled, generation == self.generation else { if self.enabled { self.query() }; return }
-                self.activeAppName = selected?.source ?? ""
-                if self.playing != (selected?.isPlaying == true) { self.playing = selected?.isPlaying == true; self.schedule() }
-                if self.lastStatus != status { self.lastStatus = status; self.onStatus?(status) }
-                self.onInfo?(selected)
+                for app in MusicPlaybackState.apps {
+                    if let reading = readings[app] { self.playback.applyReading(reading, from: app, startedAt: revision) }
+                }
+                self.issues = issues
+                self.publish()
                 if self.refreshQueued { self.refreshQueued = false; self.query() }
             }
         }
+    }
+    private func publish() {
+        let selected = playback.selected
+        activeAppName = selected?.source ?? ""
+        let isPlaying = selected?.isPlaying == true
+        if playing != isPlaying {
+            playing = isPlaying
+            schedule()
+        }
+        let summary = selected.map { "\($0.source) · \($0.isPlaying ? "播放中" : "已暂停")" }
+        let status = ([summary].compactMap { $0 } + issues).joined(separator: "；")
+        let message = status.isEmpty ? "等待 Music 或 Spotify 播放" : status
+        if lastStatus != message { lastStatus = message; onStatus?(message) }
+        onInfo?(selected)
     }
     private func fetch(app: String, issues: inout [String]) -> MediaInfo? {
         let source = """
         with timeout of 2 seconds
         tell application "\(app)"
             if player state is stopped then return {}
-            return {name of current track, artist of current track, album of current track, duration of current track, player position, player state as text}
+            set trackName to name of current track
+            set trackArtist to ""
+            set trackAlbum to ""
+            set trackDuration to 0
+            set trackPosition to 0
+            try
+                set trackArtist to artist of current track
+            end try
+            try
+                set trackAlbum to album of current track
+            end try
+            try
+                set trackDuration to duration of current track
+            end try
+            try
+                set trackPosition to player position
+            end try
+            return {trackName, trackArtist, trackAlbum, trackDuration, trackPosition, (player state is playing)}
         end tell
         end timeout
         """
@@ -103,9 +158,13 @@ final class MusicAppMonitor {
             else { issues.append("\(app)：暂时无法读取") }
             return nil
         }
-        guard result.numberOfItems >= 6, let title = result.atIndex(1)?.stringValue, !title.isEmpty else { return nil }
+        if result.numberOfItems == 0 { return nil }
+        guard result.numberOfItems >= 6, let title = result.atIndex(1)?.stringValue, !title.isEmpty else {
+            issues.append("\(app)：暂时无法读取")
+            return nil
+        }
         let duration = result.atIndex(4)?.doubleValue ?? 0
-        var info = MediaInfo(title: title, artist: result.atIndex(2)?.stringValue ?? "", isPlaying: result.atIndex(6)?.stringValue?.lowercased() == "playing",
+        var info = MediaInfo(title: title, artist: result.atIndex(2)?.stringValue ?? "", isPlaying: result.atIndex(6)?.booleanValue == true,
                              album: result.atIndex(3)?.stringValue ?? "", duration: app == "Spotify" ? duration / 1000 : duration,
                              elapsed: result.atIndex(5)?.doubleValue ?? 0, source: app)
         let key = "\(app)|\(info.title)|\(info.artist)|\(info.album)"
@@ -115,7 +174,7 @@ final class MusicAppMonitor {
             artworkAttempts[key] = Date()
             if app == "Music" {
                 var artError: NSDictionary?
-                let descriptor = NSAppleScript(source: "tell application \"Music\" to get data of artwork 1 of current track")?.executeAndReturnError(&artError)
+                let descriptor = NSAppleScript(source: "with timeout of 2 seconds\ntell application \"Music\" to get data of artwork 1 of current track\nend timeout")?.executeAndReturnError(&artError)
                 if artError == nil, let data = descriptor?.data, let image = NSImage(data: data), let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
                     info.artwork = cg; artworkCache[key] = cg
                 }
@@ -129,7 +188,7 @@ final class MusicAppMonitor {
     private func fetchSpotifyArtwork(key: String) {
         guard !pendingArtwork.contains(key) else { return }
         var error: NSDictionary?
-        let text = NSAppleScript(source: "tell application \"Spotify\" to get artwork url of current track")?.executeAndReturnError(&error).stringValue
+        let text = NSAppleScript(source: "with timeout of 2 seconds\ntell application \"Spotify\" to get artwork url of current track\nend timeout")?.executeAndReturnError(&error).stringValue
         guard error == nil, let text, let url = URL(string: text), url.scheme == "https" else { return }
         pendingArtwork.insert(key)
         var request = URLRequest(url: url); request.timeoutInterval = 10
@@ -189,5 +248,97 @@ enum MediaSourcePolicy {
         let playing = candidates.filter(\.isPlaying)
         return playing.first(where: { $0.source == lastActive }) ?? playing.first
             ?? candidates.first(where: { $0.source == lastActive }) ?? candidates.first
+    }
+}
+
+enum MusicPlaybackEvent {
+    case stopped
+    case track(playing: Bool, title: String?, artist: String?, album: String?, duration: Double?, elapsed: Double?)
+
+    init?(userInfo: [AnyHashable: Any]?) {
+        guard let userInfo, let state = (userInfo["Player State"] as? String)?.lowercased() else { return nil }
+        if state == "stopped" { self = .stopped; return }
+        guard state == "playing" || state == "paused" else { return nil }
+        func string(_ key: String) -> String? {
+            guard let value = (userInfo[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else { return nil }
+            return value
+        }
+        func time(_ key: String) -> Double? {
+            let value = (userInfo[key] as? NSNumber)?.doubleValue ?? string(key).flatMap(Double.init)
+            return value.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        }
+        self = .track(playing: state == "playing", title: string("Name"), artist: string("Artist"), album: string("Album"),
+                      duration: (time("Total Time") ?? time("Duration")).map { $0 / 1_000 }, elapsed: time("Playback Position"))
+    }
+}
+
+/// Keeps a poll that took longer to return from undoing a newer playback notification.
+struct MusicPlaybackState {
+    static let apps = ["Music", "Spotify"]
+    private(set) var revision = 0
+    private var eventRevisions: [String: Int] = [:]
+    private var byApp: [String: MediaInfo] = [:]
+    private var lastActive = ""
+
+    var selected: MediaInfo? {
+        MediaSourcePolicy.select(Self.apps.compactMap { byApp[$0] }, lastActive: lastActive)
+    }
+
+    @discardableResult
+    mutating func apply(_ event: MusicPlaybackEvent, from app: String, at now: Date = Date()) -> Bool {
+        revision += 1
+        eventRevisions[app] = revision
+        switch event {
+        case .stopped:
+            return byApp.removeValue(forKey: app) != nil
+        case .track(let playing, let title, let artist, let album, let duration, let elapsed):
+            let previous = byApp[app]
+            guard let title = title ?? previous?.title else { return false }
+            let sameTrack = previous.map { Self.matches($0, title: title, artist: artist, album: album) } ?? false
+            var song = sameTrack ? previous?.interpolated(at: now) ?? MediaInfo() : MediaInfo()
+            song.title = title
+            song.artist = artist ?? song.artist
+            song.album = album ?? song.album
+            song.source = app
+            song.duration = duration ?? song.duration
+            song.elapsed = elapsed ?? song.elapsed
+            song.isPlaying = playing
+            song.sampledAt = now
+            if song.trackID.isEmpty { song.trackID = Self.trackID(for: song) }
+            update(song, from: app)
+            return true
+        }
+    }
+
+    mutating func applyReading(_ reading: MediaInfo?, from app: String, startedAt revision: Int) {
+        guard (eventRevisions[app] ?? 0) <= revision else { return }
+        guard var song = reading else { byApp[app] = nil; return }
+        if let previous = byApp[app], Self.matches(previous, title: song.title, artist: song.artist, album: song.album) {
+            song.trackID = previous.trackID
+            if song.artwork == nil {
+                song.artwork = previous.artwork
+                song.dominantColor = previous.dominantColor
+            }
+            if song.artist.isEmpty { song.artist = previous.artist }
+            if song.album.isEmpty { song.album = previous.album }
+            if song.duration == 0 { song.duration = previous.duration }
+        }
+        update(song, from: app)
+    }
+
+    private mutating func update(_ song: MediaInfo, from app: String) {
+        if song.isPlaying && byApp[app]?.isPlaying != true { lastActive = app }
+        byApp[app] = song
+    }
+
+    private static func trackID(for song: MediaInfo) -> String {
+        "\(song.source)|\(song.title)|\(song.artist)|\(song.album)"
+    }
+
+    private static func matches(_ song: MediaInfo, title: String, artist: String?, album: String?) -> Bool {
+        song.title == title
+            && (artist?.isEmpty != false || song.artist.isEmpty || song.artist == artist)
+            && (album?.isEmpty != false || song.album.isEmpty || song.album == album)
     }
 }

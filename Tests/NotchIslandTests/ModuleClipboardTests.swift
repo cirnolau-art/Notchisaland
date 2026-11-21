@@ -109,12 +109,4 @@ final class ModuleClipboardTests: XCTestCase {
             XCTAssertEqual(history.entries.count, 1)
         }
     }
-    func testGlassOpaquePlateauCoversNotchAndStopsRemainOrdered() {
-        for height: CGFloat in [116, 192, 280, 364] {
-            let stops = IslandBackdropView.tintStops(height: height, notchHeight: 38)
-            XCTAssertEqual(stops.first, 0); XCTAssertEqual(stops.last, 1)
-            XCTAssertEqual(stops, stops.sorted())
-            XCTAssertGreaterThanOrEqual(stops[1] * height, 41)
-        }
-    }
 }

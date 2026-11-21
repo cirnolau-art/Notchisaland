@@ -9,6 +9,7 @@ final class IslandWindow: NSPanel {
         super.init(contentRect: NSRect(origin: .zero, size: Self.windowSize), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         appearance = NSAppearance(named: .darkAqua)
         isOpaque = false; backgroundColor = .clear; hasShadow = false
+        colorSpace = .extendedSRGB
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         isMovable = false; ignoresMouseEvents = true; hidesOnDeactivate = false
         isFloatingPanel = true; becomesKeyOnlyIfNeeded = true
