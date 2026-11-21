@@ -115,6 +115,33 @@ final class ActivityTests: XCTestCase {
         XCTAssertTrue(presses.up(1))
         XCTAssertFalse(presses.down(1, supported: false))
     }
+    func testDeviceObservationsDoNotPresentVolumeOrBrightnessHUD() throws {
+        let defaults = UserDefaults.standard
+        let domain = UserDefaults.argumentDomain
+        let old = defaults.volatileDomain(forName: domain)
+        var enabled = old
+        enabled["notchisland.systemHUDEnabled"] = true
+        defaults.removeVolatileDomain(forName: domain)
+        defaults.setVolatileDomain(enabled, forName: domain)
+        let controller = IslandController.shared
+        let island = try XCTUnwrap(controller.debugView)
+        defer {
+            island.onDismissActivity?()
+            controller.window.orderOut(nil)
+            defaults.removeVolatileDomain(forName: domain)
+            defaults.setVolatileDomain(old, forName: domain)
+        }
+        controller.debugPresent(.idle(.time("")))
+        let idle = island.debugVisibleRect
+
+        controller.volumeMonitor.onVolumeChange?(0.5, false)
+        XCTAssertEqual(island.debugVisibleRect, idle)
+
+        island.onDismissActivity?()
+        controller.debugPresent(.idle(.time("")))
+        controller.brightnessMonitor.onBrightnessChange?(0.75)
+        XCTAssertEqual(island.debugVisibleRect, idle)
+    }
     func testMediaProgressInterpolationClampsAtDuration() {
         var info = MediaInfo(title: "Test", isPlaying: true, duration: 200, elapsed: 195)
         info.sampledAt = start

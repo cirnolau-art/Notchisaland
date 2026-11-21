@@ -2,7 +2,7 @@
 
 ## 项目现状
 
-- 仓库为 `/Users/kachunlau/Documents/GitHub/Dinamic-island-but-DIYed-by-Cirnolau`。当前工作树版本是 **1.7.8（构建 19）**，来源为 `Version.env`。本地安装包为 `dist/NotchIsland-1.7.8-arm64.dmg`，最低 macOS 15.0，Apple 芯片。已有 `RELEASE.md` 写到 1.7.3。
+- 仓库为 `/Users/kachunlau/Documents/GitHub/Dinamic-island-but-DIYed-by-Cirnolau`。当前工作树版本是 **1.7.9（构建 20）**，来源为 `Version.env`。本地安装包为 `dist/NotchIsland-1.7.9-arm64.dmg`，最低 macOS 15.0，Apple 芯片。已有 `RELEASE.md` 写到 1.7.3。
 - 分支 `main` 跟踪 `origin/main`。本地记录中两者均指向 `9a5fc8dfd560d9b18f078826a10862907a25bd8f`（说明书更新）。没有暂存改动。1.7.4–1.7.8 是相对该 HEAD 的本地改动和构建产物。
   下列路径相对于仓库根目录，`M` 表示已跟踪但未暂存，`??` 表示未跟踪。清单计入这份交接文档，`dist/` 和 `artifacts/` 已被 Git 忽略。
 
@@ -52,9 +52,12 @@
 - **2026-11-21 · 动画与屏幕对照**：轮廓动画驱动 AppKit 玻璃的真实视图尺寸。移除主体和展开歌词的独立垂直位移，反向时复用同一布局。展开歌词在自身离开轮廓前淡出，保留无遮罩的 HDR 图层；紧凑歌词随过渡显隐。动画回归先失败后通过。在明暗测试背景录屏复核纯黑收起、连续反向、三种原生玻璃和渐变开关，确认同尺寸切换生效。画面检查另外发现浅色玻璃上的前景对比不足，已加入控件与歌词的局部对比，待随最终构建复核。
 - **1.7.8 · 设置与最终验证**：设置改用跟随系统明暗的 SwiftUI 原生分组表单，六个分类沿用原入口。macOS 26 起动作按钮使用 `.glass`，旧系统保留标准按钮。通过明暗窗口截图和隔离设置交互，切换六个分类，并从清透档恢复默认、重新打开核对渐变、色调与高光。玻璃默认附加色调降为 0，已保存的色调仍保留。在本机 macOS 27.3 最终验证 121 项测试、打包交互、明暗背景慢放、清透前景、DMG 校验和 SHA-256、挂载后的签名、应用拖拽入口与启动检查。详细记录为 `/private/tmp/notchisland-178-qa.d6mVni/app.log`，浅色慢放为 `/private/tmp/notchisland-178-screen.7bKgyh/light-slow.mp4`，设置明暗截图同目录。用户验收、macOS 15/26 真机、实际播放及实屏 HDR 对比仍待复核。
 - **2026-11-21 · README**：已更新 1.7.8 的功能、玻璃外观入口、系统要求与本地 DMG 构建步骤。
+- **1.7.9 · 音量、亮度与滚动**：只由接管的媒体键弹出音量和亮度 HUD。后台读数继续维护硬件状态，音频面板保持刷新，已打开的 HUD 只响应按键和岛内滑块。自然滚动默认跟随系统，可在交互设置覆盖或恢复；迁移旧反转设置。音量及亮度提示条分别保存低值色、高值色和 HDR 开关；颜色在线性 sRGB 插值，HDR 随百分比升高。38 项定向测试通过，覆盖后台误弹回归、滚动迁移、端点颜色、峰值增益和两条提示的独立配置。
+- **1.7.9 · 构建验证**：本机登录桌面会话中完整测试 128 项全部通过，日志为 `/private/tmp/notchisland-179-desktop-tests.log`。生产构建、临时签名、DMG 校验及打包后隔离快照检查通过。自动化验证覆盖真实 HUD 层的浮点图像与峰值余量标记，物理媒体键、鼠标/触控板方向和实屏 HDR 亮度待复核。
 
 ## 待办（按优先级）
 
+0. **P0 · 1.7.9 真机复核** — 在已授予辅助功能权限且启用媒体键接管的环境测试音量加减、静音和亮度键。确认自动调整不会弹出或移动提示，用鼠标和触控板分别测试自然滚动开关。用支持 HDR 的屏幕比较同一颜色在 SDR、50% 和 100% 的实屏亮度，记录系统提供的实际 HDR 余量。
 1. **P0 · 1.7.8 用户复核** — 检查用户桌面背景上的标准、轻模糊、清透玻璃和设置明暗外观，播放状态下快速展开、收起及反向。从用户发现的问题和本机的同帧检查继续定位。
 2. **P1 · 真实播放有无漏报** — 1.7.5 有播放后刘海不响应的反馈 → `MusicAppMonitor.swift:44`、`:80`、`:104`，`IslandController.swift:259`、`:294`，`Snapshot.swift` 的 `runPlaybackCheck` → 本机 macOS 27 日志显示 MediaRemote 读取曲目被拒绝，旧版等脚本查询且曾被持续隐藏状态阻挡 → 用户允许后，用正常安装的 app 分别实测 Music 和 Spotify 的播放、暂停、换歌与退出，再看「音乐与权限」及 `/tmp/notchisland.log`。合成事件已通过，脚本权限是否为用户当时的故障原因未确认。若还漏报，先查分发事件是否收到和选源结果，再检查自动化权限。未授权时首个事件可先显示歌名，精确进度、封面和控制仍依赖相应权限。
 3. **P1 · HDR 和系统兼容** — 之前开启 HDR 仍看不出亮度差 → `LyricTextView.swift:106`、`:157`、`:265`，`IslandView.swift` 的 `buildMusic`，`Tests/NotchIslandTests/LyricCompositingTests.swift:33` → 旧 `.ifSupported` 会把测试渲染压到 1.0，父级遮罩不一定压低亮度，已用带/不带遮罩的离屏对照排除“遮罩必然夹回 SDR” → 在 HDR 内屏与普通外接屏上用同一段白色歌词切换 HDR 和强度，记录显示器余量，同时在 macOS 15/26 运行 DMG 内程序的 `--startup-check` 并启动正常界面。当前浮点测试没有测量屏幕亮度。若只在真机失效，查显示器余量和透明窗口合成，不要调高像素来掩盖问题。
@@ -66,9 +69,9 @@
 - 用户明确拒绝：双指捏合和因此触发的持续隐藏、灰色紧凑玻璃、手选播放器、要求手工下载歌词、AirPods 静置时反复弹电量。保留普通滚动手势、自动识别播放来源与在线歌词。AirPods 自动提示以实际音频输出为现有触发依据，不能宣称检测到佩戴。
 - 歌词必须自动换行并保留原时间；真逐字数据做逐字渐亮，普通 LRC 整句亮，省资源模式只滚动、关闭 HDR 增强。HDR 开关和光晕独立，尊重减少透明度、减少动态效果与多屏能力。测试过的离屏浮点值与实屏亮度分开记录。
 - **macOS 15**：最低部署目标。HDR 图像的 `CGImage(headroom:…)` 从 15 可用，图层用 `wantsExtendedDynamicRangeContent`（14 起可用，26 弃用）。无原生玻璃入口，使用纯黑外观。**macOS 26**：`NSGlassEffectView` 的 `.regular`、`.clear` 和 `CALayer.preferredDynamicRange` 可用，玻璃类必须弱链接。清透档需保留系统 `.clear`，避免自绘不透明层盖住材质。**macOS 27**：`effectIsInteractive` 从 27 可用，当前没有调用；旧 MediaRemote 是私有兼容路径，27 上可能因权限拿不到数据，优先排查 Music/Spotify 事件与 AppleScript 路径。
-- 从仓库根目录执行 `swift test --disable-sandbox`，最新记录是 **121 项、0 失败**（本机 macOS 27.3 / Xcode 27.2，日志 `/private/tmp/notchisland-178-tests.log`）。没有已确认会在当前版随机失败的用例。剪贴板测试需要登录桌面会话和粘贴板服务，先区分环境失败。旧快照曾在主队列嵌套等待淡出，阻塞实际清理，已改成异步续跑。
+- 从仓库根目录执行 `swift test --disable-sandbox`，最新记录是 **128 项、0 失败**（本机 macOS 27.3 / Xcode 27.2，日志 `/private/tmp/notchisland-179-desktop-tests.log`）。剪贴板和输入法测试需要登录桌面会话与对应系统服务，先区分环境失败。旧快照曾在主队列嵌套等待淡出，阻塞实际清理，已改成异步续跑。
 - 构建执行 `./build-app.sh`，用 `open -n -W dist/NotchIsland.app --args --snapshot --snapshot-output /private/tmp/notchisland-qa` 检查 `verification.txt`。安装包执行 `./build-dmg.sh --skip-build`，复核版本、签名、SHA-256 和 /Applications 拖拽入口。安装包为本地临时签名，未公证。未经用户要求，不提交或推送 GitHub、不发布 Release、不替换已安装应用。项目按 GPL-3.0 分发，保留 Lau Kachun 版权。
 
 ## 下一步第一件事
 
-用本地 1.7.8 安装包或隔离预览复核用户环境下的玻璃、动画和设置外观。`PolishPreview.swift` 的 `1`、`2` 展开和收起，`6–8` 切换三种原生玻璃，`9` 切换渐变，`0` 打开隔离设置。每阶段完成后更新本文件的「已完成」和「待办」。
+用本地 1.7.9 安装包复核媒体键触发、自动调节静默、自然滚动开关和提示条 HDR。玻璃、动画和设置外观继续通过隔离预览复核。`PolishPreview.swift` 的 `1`、`2` 展开和收起，`6–8` 切换三种原生玻璃，`9` 切换渐变，`0` 打开隔离设置。每阶段完成后更新本文件的「已完成」和「待办」。

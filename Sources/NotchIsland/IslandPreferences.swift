@@ -5,6 +5,10 @@ extension Notification.Name {
     static let islandAppearanceChanged = Notification.Name("NotchIsland.appearanceChanged")
 }
 
+enum HUDTrackKind: String {
+    case volume, brightness
+}
+
 final class IslandPreferences {
     static let shared = IslandPreferences(defaults: SnapshotMode.enabled ? SnapshotMode.defaults : .standard)
     private let defaults: UserDefaults
@@ -21,6 +25,24 @@ final class IslandPreferences {
     }
     var visibleTabs: [IslandTab] { IslandTab.allCases.filter { isEnabled($0) } }
     func resolvedTab(_ preferred: IslandTab) -> IslandTab? { isEnabled(preferred) ? preferred : visibleTabs.first }
+    static var systemNaturalScrolling: Bool {
+        UserDefaults.standard.object(forKey: "com.apple.swipescrolldirection") as? Bool ?? true
+    }
+    var naturalScrolling: Bool? {
+        get {
+            if let override = defaults.object(forKey: "notchisland.naturalScrolling") as? Bool { return override }
+            // Legacy inversion was relative to the device's physical direction for vertical gestures.
+            return defaults.bool(forKey: "notchisland.invertScrollV2") ? false : nil
+        }
+        set {
+            defaults.set(newValue, forKey: "notchisland.naturalScrolling")
+            defaults.removeObject(forKey: "notchisland.invertScrollV2")
+        }
+    }
+    static func scrollDirectionMultiplier(naturalScrolling: Bool?, eventIsInverted: Bool) -> CGFloat {
+        guard let naturalScrolling else { return 1 }
+        return naturalScrolling == eventIsInverted ? 1 : -1
+    }
     var systemHUDEnabled: Bool { get { defaults.object(forKey: "notchisland.systemHUDEnabled") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.systemHUDEnabled"); changed() } }
     var inputHUDEnabled: Bool { get { defaults.object(forKey: "notchisland.inputHUDEnabled") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.inputHUDEnabled"); changed() } }
     var powerHUDEnabled: Bool { get { defaults.object(forKey: "notchisland.powerHUDEnabled") as? Bool ?? true } set { defaults.set(newValue, forKey: "notchisland.powerHUDEnabled"); changed() } }
@@ -112,6 +134,20 @@ final class IslandPreferences {
             defaults.set(data, forKey: "notchisland.lyricsAppearance")
             NotificationCenter.default.post(name: .islandAppearanceChanged, object: nil)
         }
+    }
+    func hudTrackAppearance(for kind: HUDTrackKind) -> HUDTrackAppearance {
+        let key = "notchisland.hudTrack.\(kind.rawValue)"
+        guard let data = defaults.data(forKey: key),
+              let appearance = try? PropertyListDecoder().decode(HUDTrackAppearance.self, from: data) else {
+            return HUDTrackAppearance()
+        }
+        return appearance
+    }
+    func setHUDTrackAppearance(_ appearance: HUDTrackAppearance, for kind: HUDTrackKind) {
+        guard appearance != hudTrackAppearance(for: kind),
+              let data = try? PropertyListEncoder().encode(appearance) else { return }
+        defaults.set(data, forKey: "notchisland.hudTrack.\(kind.rawValue)")
+        appearanceChanged()
     }
     var accentRGB: UInt32 {
         get { UInt32(clamping: defaults.object(forKey: "notchisland.accentRGB") as? Int ?? 0xFFFFFF) & 0xFFFFFF }

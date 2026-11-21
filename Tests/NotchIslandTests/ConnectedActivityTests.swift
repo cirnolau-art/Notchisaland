@@ -100,4 +100,29 @@ final class ConnectedActivityTests: XCTestCase {
         preferences.glassOpacity = -1
         XCTAssertEqual(preferences.glassOpacity, 0)
     }
+    func testNaturalScrollingUsesEventDirectionUnlessOverridden() {
+        for eventIsInverted in [false, true] {
+            XCTAssertEqual(IslandPreferences.scrollDirectionMultiplier(naturalScrolling: nil, eventIsInverted: eventIsInverted), 1)
+            XCTAssertEqual(IslandPreferences.scrollDirectionMultiplier(naturalScrolling: eventIsInverted, eventIsInverted: eventIsInverted), 1)
+            XCTAssertEqual(IslandPreferences.scrollDirectionMultiplier(naturalScrolling: !eventIsInverted, eventIsInverted: eventIsInverted), -1)
+        }
+    }
+
+    func testNaturalScrollingPreservesLegacyInversionAndCanRestoreSystemDirection() throws {
+        let name = "NotchIsland.scroll.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let preferences = IslandPreferences(defaults: defaults)
+        XCTAssertNil(preferences.naturalScrolling)
+        defaults.set(false, forKey: "notchisland.invertScrollV2")
+        XCTAssertNil(preferences.naturalScrolling)
+        defaults.set(true, forKey: "notchisland.invertScrollV2")
+        XCTAssertEqual(preferences.naturalScrolling, false)
+
+        preferences.naturalScrolling = true
+        XCTAssertEqual(IslandPreferences(defaults: defaults).naturalScrolling, true)
+        preferences.naturalScrolling = nil
+        XCTAssertNil(IslandPreferences(defaults: defaults).naturalScrolling)
+    }
 }

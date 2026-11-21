@@ -43,6 +43,8 @@ private struct IslandSettingsView: View {
     @State private var glassOpacity = IslandPreferences.shared.glassOpacity
     @State private var glassRimStrength = IslandPreferences.shared.glassRimStrength
     @State private var lyricsAppearance = IslandPreferences.shared.lyricsAppearance
+    @State private var volumeTrack = IslandPreferences.shared.hudTrackAppearance(for: .volume)
+    @State private var brightnessTrack = IslandPreferences.shared.hudTrackAppearance(for: .brightness)
     @State private var accentRGB = IslandPreferences.shared.accentRGB
     @State private var airPodsEnabled = IslandPreferences.shared.airPodsEnabled
     @State private var notificationsEnabled = IslandPreferences.shared.notificationsEnabled
@@ -66,7 +68,8 @@ private struct IslandSettingsView: View {
     @State private var fullscreen = IslandPreferences.shared.fullscreenMode
     @State private var takeover = IslandPreferences.shared.takeover
     @State private var login = SMAppService.mainApp.status == .enabled
-    @State private var invert = UserDefaults.standard.bool(forKey: "notchisland.invertScrollV2")
+    @State private var naturalScrolling = IslandPreferences.shared.naturalScrolling
+    @State private var systemNaturalScrolling = IslandPreferences.systemNaturalScrolling
     @State private var exclusions = IslandPreferences.shared.excludedApps.joined(separator: ", ")
     @State private var screens = NSScreen.screens
     @State private var status = ""
@@ -139,6 +142,8 @@ private struct IslandSettingsView: View {
             case 0: interactionPage
             case 1:
                 appearancePage
+                hudTrackSection("音量提示条", appearance: $volumeTrack, kind: .volume)
+                hudTrackSection("亮度提示条", appearance: $brightnessTrack, kind: .brightness)
                 lyricsAppearancePage
                 displayPage
             case 2: connectedPage
@@ -191,7 +196,21 @@ private struct IslandSettingsView: View {
                 Text("停留片刻显示摘要，点击展开；横向滑动切换模块。").font(.system(size: 11)).foregroundStyle(.secondary)
                 Picker("离开后自动收起", selection: $autoHide) { Text("5 秒").tag(5.0); Text("10 秒").tag(10.0); Text("15 秒").tag(15.0); Text("30 秒").tag(30.0); Text("手动收起").tag(0.0) }.onChange(of: autoHide) { _, value in IslandPreferences.shared.autoHide = value }
                 Text("指针停留、拖动和输入时保持展开。Esc 或点击外部收起。").font(.system(size: 11)).foregroundStyle(.secondary)
-                Toggle("反转展开手势方向", isOn: $invert).onChange(of: invert) { _, value in UserDefaults.standard.set(value, forKey: "notchisland.invertScrollV2") }
+                Toggle("自然滚动", isOn: Binding(
+                    get: { naturalScrolling ?? systemNaturalScrolling },
+                    set: { naturalScrolling = $0 }
+                ))
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                    systemNaturalScrolling = IslandPreferences.systemNaturalScrolling
+                }
+                .onChange(of: naturalScrolling) { _, value in IslandPreferences.shared.naturalScrolling = value }
+                .help("默认跟随 macOS 的自然滚动设置。")
+                if naturalScrolling != nil {
+                    Button("恢复跟随系统滚动方向") {
+                        systemNaturalScrolling = IslandPreferences.systemNaturalScrolling
+                        naturalScrolling = nil
+                    }
+                }
             }
             Section("动画与启动") {
                 Toggle("柔和动效", isOn: $gentle).onChange(of: gentle) { _, value in IslandPreferences.shared.gentleMotion = value }
@@ -251,6 +270,25 @@ private struct IslandSettingsView: View {
         .onChange(of: glassOpacity) { _, value in IslandPreferences.shared.glassOpacity = value }
         .onChange(of: glassRimStrength) { _, value in IslandPreferences.shared.glassRimStrength = value }
     }
+    private func hudTrackSection(_ title: String, appearance: Binding<HUDTrackAppearance>, kind: HUDTrackKind) -> some View {
+        Section(title) {
+            let volume = kind == .volume
+            hudColorPicker(volume ? "低音量颜色" : "低亮度颜色", rgb: appearance.lowColorRGB)
+            hudColorPicker(volume ? "高音量颜色" : "高亮度颜色", rgb: appearance.highColorRGB)
+            Toggle("HDR 高亮", isOn: appearance.hdrEnabled)
+        }
+        .onChange(of: appearance.wrappedValue) { _, value in
+            IslandPreferences.shared.setHUDTrackAppearance(value, for: kind)
+        }
+    }
+
+    private func hudColorPicker(_ title: String, rgb: Binding<UInt32>) -> some View {
+        ColorPicker(title, selection: Binding(
+            get: { Color(nsColor: LyricsAppearance.color(for: rgb.wrappedValue)) },
+            set: { if let value = LyricsAppearance.rgb(for: NSColor($0)) { rgb.wrappedValue = value } }
+        ), supportsOpacity: false)
+    }
+
     private var lyricsAppearancePage: some View {
         Section("歌词外观") {
             LyricAppearancePreview(appearance: lyricsAppearance, rightBackground: lyricsRightBackground).frame(height: 54).accessibilityHidden(true)

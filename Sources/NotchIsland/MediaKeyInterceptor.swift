@@ -77,15 +77,16 @@ final class MediaKeyInterceptor {
         let supported = !settingsShortcut && (([0, 1, 7].contains(key) && canHandleVolume?() == true) || ([2, 3].contains(key) && canHandleBrightness?() == true))
         let repeating = presses.captured.contains(key)
         guard presses.down(key, supported: supported) else { return Unmanaged.passUnretained(event) }
-        if key == 7 && repeating { return nil }
+        guard supported, key != 7 || !repeating else { return nil }
         let step = (option && shift) ? 1.0 / 64 : 1.0 / 16
         DispatchQueue.main.async { [weak self] in
+            guard let self, self.wantsEnabled, self.isActive else { return }
             switch key {
-            case 0: _ = self?.onVolumeNudge?(step)
-            case 1: _ = self?.onVolumeNudge?(-step)
-            case 2: _ = self?.onBrightnessNudge?(step)
-            case 3: _ = self?.onBrightnessNudge?(-step)
-            case 7: _ = self?.onMuteToggle?()
+            case 0: _ = self.onVolumeNudge?(step)
+            case 1: _ = self.onVolumeNudge?(-step)
+            case 2: _ = self.onBrightnessNudge?(step)
+            case 3: _ = self.onBrightnessNudge?(-step)
+            case 7: _ = self.onMuteToggle?()
             default: break
             }
         }

@@ -186,17 +186,22 @@ final class IslandController: NSObject {
         }
         notificationBridge.onNotification = { [weak self] item in self?.enqueueActivity(.notification(item)) }
         islandView.onDismissActivity = { [weak self] in self?.dismissActivity() }
-        mediaKeys.canHandleVolume = { [weak self] in self?.volumeMonitor.canAdjust == true }
-        mediaKeys.canHandleBrightness = { [weak self] in self?.brightnessMonitor.canAdjust == true }
-        mediaKeys.onVolumeNudge = { [weak self] value in self?.volumeMonitor.nudge(value) ?? false }
-        mediaKeys.onBrightnessNudge = { [weak self] value in self?.brightnessMonitor.nudge(value) ?? false }
-        mediaKeys.onMuteToggle = { [weak self] in self?.volumeMonitor.toggleMute() ?? false }
-        volumeMonitor.onVolumeChange = { [weak self] value, muted in
-            guard let self else { return }
-            self.updateConnectedPanels()
-            if IslandPreferences.shared.systemHUDEnabled, self.policy.surface != .panel(.audio) { self.presentTransient(.volume(value, muted), seconds: 1.6) }
+        mediaKeys.canHandleVolume = { [weak self] in
+            guard let monitor = self?.volumeMonitor else { return false }
+            return monitor.canAdjust && monitor.currentVolume() != nil
         }
-        brightnessMonitor.onBrightnessChange = { [weak self] value in guard IslandPreferences.shared.systemHUDEnabled else { return }; self?.presentTransient(.brightness(value), seconds: 1.6) }
+        mediaKeys.canHandleBrightness = { [weak self] in
+            guard let monitor = self?.brightnessMonitor else { return false }
+            return monitor.canAdjust && monitor.read() != nil
+        }
+        mediaKeys.onVolumeNudge = { [weak self] value in self?.handleVolumeKey { $0.nudge(value) } ?? false }
+        mediaKeys.onBrightnessNudge = { [weak self] value in
+            guard let self, self.brightnessMonitor.nudge(value) else { return false }
+            if let brightness = self.brightnessMonitor.read() { self.presentSystemHUD(.brightness(brightness)) }
+            return true
+        }
+        mediaKeys.onMuteToggle = { [weak self] in self?.handleVolumeKey { $0.toggleMute() } ?? false }
+        volumeMonitor.onVolumeChange = { [weak self] _, _ in self?.updateConnectedPanels() }
         inputMonitor.onInputSourceChange = { [weak self] name in guard IslandPreferences.shared.inputHUDEnabled else { return }; self?.presentTransient(.inputSource(name), seconds: 1.7) }
         batteryMonitor.onPowerChange = { [weak self] plugged, percent in guard IslandPreferences.shared.powerHUDEnabled else { return }; self?.presentTransient(.charging(plugged, percent), seconds: 2.5) }
         musicApp.onInfo = { [weak self] info in
@@ -241,8 +246,16 @@ final class IslandController: NSObject {
         islandView.onTimerAdd = { [weak self] in self?.alarmManager.addMinute(); self?.keepAlive() }
         islandView.onTimerCancel = { [weak self] in self?.alarmManager.cancelTimer(); self?.keepAlive(); (NSApp.delegate as? AppDelegate)?.rebuildMenu() }
         islandView.onStopAlert = { [weak self] in self?.alarmManager.stopRinging() }
-        islandView.onVolume = { [weak self] value in self?.volumeMonitor.setVolume(value); self?.transientEnd = Date().addingTimeInterval(1.6) }
-        islandView.onBrightness = { [weak self] value in self?.brightnessMonitor.setBrightness(value); self?.transientEnd = Date().addingTimeInterval(1.6) }
+        islandView.onVolume = { [weak self] value in
+            guard let self, case .volume = self.transient, self.volumeMonitor.setVolume(value) else { return }
+            self.updateSystemHUD(.volume(value, self.volumeMonitor.isMuted))
+            self.transientEnd = Date().addingTimeInterval(1.6)
+        }
+        islandView.onBrightness = { [weak self] value in
+            guard let self, case .brightness = self.transient, self.brightnessMonitor.setBrightness(value) else { return }
+            self.updateSystemHUD(.brightness(value))
+            self.transientEnd = Date().addingTimeInterval(1.6)
+        }
         islandView.onInteraction = { [weak self] value in self?.interacting = value; self?.keepAlive() }
         islandView.onDropHover = { [weak self] value in
             guard let self, IslandPreferences.shared.isEnabled(.files) else { return }; self.dropActive = value
@@ -300,6 +313,22 @@ final class IslandController: NSObject {
         updateWorkTimers()
     }
     private func renderIfIdle() { if case .idle = policy.surface, !policy.transientVisible { renderUnderlying() } }
+    private func handleVolumeKey(_ adjust: (VolumeMonitor) -> Bool) -> Bool {
+        guard adjust(volumeMonitor) else { return false }
+        if policy.surface != .panel(.audio), let volume = volumeMonitor.currentVolume() {
+            presentSystemHUD(.volume(volume, volumeMonitor.isMuted))
+        }
+        return true
+    }
+    private func presentSystemHUD(_ state: IslandState) {
+        guard IslandPreferences.shared.systemHUDEnabled else { return }
+        presentTransient(state, seconds: 1.6)
+    }
+    private func updateSystemHUD(_ state: IslandState) {
+        transient = state
+        currentState = state
+        islandView.render(state)
+    }
     @discardableResult private func presentTransient(_ state: IslandState, seconds: TimeInterval) -> Bool {
         if case .notification = transient { return false }
         guard !hidden, !suppressed, !compactOnly, !interacting, !dropActive, policy.showTransient() else { return false }

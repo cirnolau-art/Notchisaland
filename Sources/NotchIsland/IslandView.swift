@@ -169,8 +169,12 @@ private final class IslandSliderCell: NSSliderCell {
 final class InteractionSlider: NSSlider {
     private let trackLayer = CALayer()
     private let progressLayer = CALayer()
+    var hudAppearance: HUDTrackAppearance? {
+        didSet { if oldValue != hudAppearance { updateTrackColor(level: fraction) } }
+    }
     private var animatesProgress = false
     private var trackingValue = false
+    private var fraction: Double { min(1, max(0, (doubleValue - minValue) / max(0.001, maxValue - minValue))) }
     override var doubleValue: Double { didSet { updateProgress(animated: animatesProgress && !trackingValue) } }
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect); cell = IslandSliderCell(); wantsLayer = true
@@ -182,12 +186,39 @@ final class InteractionSlider: NSSlider {
     }
     required init?(coder: NSCoder) { super.init(coder: coder) }
     override func layout() { super.layout(); updateProgress(animated: false) }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if hudAppearance != nil { updateTrackColor(level: fraction) }
+    }
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        if hudAppearance != nil { updateTrackColor(level: fraction) }
+    }
+
+    private func updateTrackColor(level: Double) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        let peak = window?.screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1
+        let image = hudAppearance?.extendedImage(at: level, peak: peak)
+        progressLayer.contents = image
+        progressLayer.backgroundColor = image == nil
+            ? (hudAppearance?.color(at: level) ?? NSColor.white.withAlphaComponent(0.82)).cgColor
+            : nil
+        if #available(macOS 26.0, *) {
+            progressLayer.preferredDynamicRange = image == nil ? .standard : .high
+        } else {
+            progressLayer.wantsExtendedDynamicRangeContent = image != nil
+        }
+    }
+
     func setDisplayedValue(_ value: Double, animated: Bool) {
         animatesProgress = animated; doubleValue = value; animatesProgress = false
     }
     private func updateProgress(animated: Bool) {
         guard bounds.width > 0 else { return }
-        let fraction = min(1, max(0, (doubleValue - minValue) / max(0.001, maxValue - minValue)))
+        let fraction = self.fraction
+        if hudAppearance != nil { updateTrackColor(level: fraction) }
         let previous = progressLayer.presentation()?.transform.m11 ?? progressLayer.transform.m11
         let rect = (cell as? NSSliderCell)?.barRect(flipped: isFlipped) ?? bounds
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -443,6 +474,11 @@ final class IslandView: NSView {
     }
     func applyAppearance() {
         updateBackdrop(rect: visualRect, previous: nil, spring: nil)
+        switch state {
+        case .volume: hudSlider?.hudAppearance = IslandPreferences.shared.hudTrackAppearance(for: .volume)
+        case .brightness: hudSlider?.hudAppearance = IslandPreferences.shared.hudTrackAppearance(for: .brightness)
+        default: break
+        }
         let lyrics = IslandPreferences.shared.lyricsAppearance
         let accent = IslandPreferences.shared.accentRGB
         if accent != accentRGB {
@@ -1141,6 +1177,7 @@ final class IslandView: NSView {
         hudLabel?.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
         let slider = InteractionSlider(value: 0, minValue: 0, maxValue: 1, target: self, action: volume ? #selector(volumeChanged) : #selector(brightnessChanged))
         slider.frame = NSRect(x: 10, y: (notchHeight - 18) / 2, width: 92, height: 18); slider.isContinuous = true; slider.controlSize = .small
+        slider.hudAppearance = IslandPreferences.shared.hudTrackAppearance(for: volume ? .volume : .brightness)
         slider.onInteraction = { [weak self] value in self?.hudInteracting = value; self?.onInteraction?(value) }
         slider.setAccessibilityLabel(volume ? "调整音量" : "调整亮度"); rightAccessory.addSubview(slider); hudSlider = slider
     }
@@ -1376,12 +1413,14 @@ final class IslandView: NSView {
         guard !scrollHandled else { return }
         let threshold: CGFloat = event.hasPreciseScrollingDeltas ? 16 : 2
         guard max(abs(scrollX), abs(scrollY)) >= threshold else { return }
-        let invert = UserDefaults.standard.bool(forKey: "notchisland.invertScrollV2") ? -1.0 : 1.0
-        if expanded && abs(scrollX) > abs(scrollY) * 1.3 { onSelectTab?(tab.moved(by: scrollX * invert < 0 ? 1 : -1, among: visibleTabs)) }
+        let directionMultiplier = IslandPreferences.scrollDirectionMultiplier(
+            naturalScrolling: IslandPreferences.shared.naturalScrolling,
+            eventIsInverted: event.isDirectionInvertedFromDevice
+        )
+        if expanded && abs(scrollX) > abs(scrollY) * 1.3 { onSelectTab?(tab.moved(by: scrollX * directionMultiplier < 0 ? 1 : -1, among: visibleTabs)) }
         else if abs(scrollY) > abs(scrollX) * 1.3 {
             if expanded && (tab == .files || tab == .audio || tab == .clipboard) { return }
-            let direction = scrollY * invert * (event.isDirectionInvertedFromDevice ? 1 : -1)
-            if direction > 0 { onExpand?() } else { onDismiss?() }
+            if scrollY * directionMultiplier > 0 { onExpand?() } else { onDismiss?() }
         } else { return }
         scrollHandled = true; scrollCooldown = Date.timeIntervalSinceReferenceDate
     }

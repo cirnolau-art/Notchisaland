@@ -114,6 +114,7 @@ final class VolumeMonitor {
         }
     }
     func currentVolume() -> Double? { cachedVolume }
+    var isMuted: Bool { cachedMuted }
     @discardableResult func setVolume(_ volume: Double) -> Bool { apply(volume, muted: false) }
     private func apply(_ volume: Double, muted: Bool) -> Bool {
         guard volume.isFinite, canAdjust else { return false }
