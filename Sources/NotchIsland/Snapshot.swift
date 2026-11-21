@@ -518,7 +518,7 @@ enum SnapshotMode {
         view.render(.idle(.time("")), animated: false)
         check(view.debugVisibleRect == view.debugNotchRect && !view.debugGlassActive && !view.debugLyricTimerActive, "Idle notch retains activity rendering")
     }
-    private static func makeArtwork() -> CGImage? {
+    static func makeArtwork() -> CGImage? {
         let image = NSImage(size: NSSize(width: 200, height: 200))
         image.lockFocus()
         NSGradient(colors: [NSColor(calibratedRed: 0.1, green: 0.38, blue: 0.43, alpha: 1), NSColor(calibratedRed: 0.09, green: 0.13, blue: 0.26, alpha: 1)])?.draw(in: NSRect(x: 0, y: 0, width: 200, height: 200), angle: 65)

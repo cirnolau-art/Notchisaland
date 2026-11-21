@@ -16,7 +16,8 @@ enum PolishPreview {
         view.window?.ignoresMouseEvents = false
         let lyric = "你慢慢地走来"
         let segments = lyric.enumerated().map { LyricSegment(time: 2 + Double($0.offset) * 0.8, text: String($0.element), endTime: 2 + Double($0.offset + 1) * 0.8) }
-        let info = MediaInfo(title: "界面与动画检查", artist: "隔离测试 · 不连接播放器", isPlaying: true, duration: 90, elapsed: 2.1,
+        let info = MediaInfo(title: "界面与动画检查", artist: "隔离测试 · 不连接播放器",
+                             artwork: SnapshotMode.makeArtwork(), isPlaying: true, duration: 90, elapsed: 2.1,
                              lyrics: [.init(time: 0, text: "穿过旷野的风"), .init(time: 2, text: lyric, segments: segments),
                                       .init(time: 8, text: "把星光放在手心"), .init(time: 12, text: "Stay here, let the music carry on"),
                                       .init(time: 18, text: "这是一个用于检查自动换行与平滑滚动的长歌词句子"), .init(time: 28, text: "最后一行")])
@@ -38,6 +39,19 @@ enum PolishPreview {
         }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             switch event.charactersIgnoringModifiers {
+            case "r", "a", "s":
+                var appearance = IslandPreferences.shared.lyricsAppearance
+                appearance.flowStyle = event.charactersIgnoringModifiers == "r" ? .rgb
+                    : event.charactersIgnoringModifiers == "a" ? .artwork : .off
+                IslandPreferences.shared.lyricsAppearance = appearance
+                view.applyAppearance()
+            case "p":
+                if var sample = view.mediaInfo?.interpolated() {
+                    sample.isPlaying.toggle()
+                    sample.sampledAt = Date()
+                    view.mediaInfo = sample
+                    view.playbackPositionDidChange()
+                }
             case "1": view.compactMediaVisible = true; view.render(.workspace(.music, false))
             case "2": view.compactMediaVisible = true; view.render(.idle(.time("")))
             case "3": view.compactMediaVisible = false; view.render(.idle(.time("")))
@@ -72,6 +86,7 @@ enum PolishPreview {
         controller.window.orderFrontRegardless(); controller.window.makeKey()
         NSApp.activate(ignoringOtherApps: true)
         print("[Preview] 1 expanded / 2 compact / 3 idle / 4 prelude / 5 black / 6 regular / 7 clear / 8 untinted / 9 gradient / 0 settings / q quit")
+        print("[Preview] r RGB lyrics / a artwork lyrics / s normal lyrics / p pause or resume")
         print("[EDR] current=\(screen.maximumExtendedDynamicRangeColorComponentValue) potential=\(screen.maximumPotentialExtendedDynamicRangeColorComponentValue)")
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             print("[EDR] after compositing current=\(screen.maximumExtendedDynamicRangeColorComponentValue)")

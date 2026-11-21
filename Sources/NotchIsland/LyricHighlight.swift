@@ -26,10 +26,11 @@ struct LyricHighlight {
 }
 
 enum LyricHDR {
-    static func requestedGain(enabled: Bool, strength: Double, potential: CGFloat) -> CGFloat {
+    static func requestedGain(enabled: Bool, strength: Double, potential: CGFloat, usesDisplayPeak: Bool = false) -> CGFloat {
         guard enabled, strength.isFinite, potential.isFinite, potential > 1 else { return 1 }
         // Current headroom can be 1 until a layer requests EDR. The compositor
         // maps this tagged content to the headroom available at presentation.
-        return 1 + min(1, max(0, strength)) * (min(2, potential) - 1)
+        let peak = min(usesDisplayPeak ? CGFloat(Float16.greatestFiniteMagnitude) : 2, potential)
+        return 1 + min(1, max(0, strength)) * (peak - 1)
     }
 }

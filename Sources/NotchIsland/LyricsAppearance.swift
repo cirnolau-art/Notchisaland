@@ -1,5 +1,17 @@
 import AppKit
 
+enum LyricFlowStyle: Int, Codable, CaseIterable {
+    case off, rgb, artwork
+
+    var title: String {
+        switch self {
+        case .off: "关闭"
+        case .rgb: "RGB 流光"
+        case .artwork: "封面流光"
+        }
+    }
+}
+
 struct LyricsAppearance: Codable, Equatable {
     enum Weight: String, CaseIterable, Codable {
         case regular, medium, semibold, bold
@@ -31,12 +43,13 @@ struct LyricsAppearance: Codable, Equatable {
     var weight = Weight.semibold
     var colorRGB: UInt32 = 0xFFFFFF
     var glow = 0.0
+    var flowStyle = LyricFlowStyle.off
     var hdrEnabled = false
     var hdrStrength = 0.35
 
     init() {}
     private enum CodingKeys: String, CodingKey {
-        case width, opacity, size, weight, colorRGB, glow, hdrEnabled, hdrStrength
+        case width, opacity, size, weight, colorRGB, glow, flowStyle, hdrEnabled, hdrStrength
     }
     init(from decoder: Decoder) throws {
         self.init()
@@ -47,6 +60,7 @@ struct LyricsAppearance: Codable, Equatable {
         weight = try c.decodeIfPresent(Weight.self, forKey: .weight) ?? weight
         colorRGB = try c.decodeIfPresent(UInt32.self, forKey: .colorRGB) ?? colorRGB
         glow = try c.decodeIfPresent(Double.self, forKey: .glow) ?? glow
+        flowStyle = (try? c.decode(LyricFlowStyle.self, forKey: .flowStyle)) ?? .off
         hdrEnabled = try c.decodeIfPresent(Bool.self, forKey: .hdrEnabled) ?? false
         hdrStrength = try c.decodeIfPresent(Double.self, forKey: .hdrStrength) ?? hdrStrength
         self = normalized()

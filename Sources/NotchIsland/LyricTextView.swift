@@ -19,13 +19,21 @@ final class LyricTextView: NSView {
     private var lastScale: CGFloat = 0
     private var raster: LyricRaster?
     private var normal: CGImage?
+    private var flowPalette = LyricFlowPalette.rgb
+    private var flowGradient: LyricFlowGradient?
+    private var compact = false
     private var suspended = false
+    private var usesFlow: Bool { active && style == .appleMusic && lyricAppearance.flowStyle != .off }
     private var reduceMotion = false
     private var clock: (elapsed: TimeInterval, host: TimeInterval, playing: Bool)?
     private(set) var stringValue = ""
     private(set) var hdrGain: CGFloat = 1
     var debugHasGlyphAnimations: Bool { highlights.contains { $0.animation(forKey: "highlight") != nil } }
     var debugGlowActive: Bool { highlights.contains { $0.shadowOpacity > 0 } }
+    var debugFlowActive: Bool { flowGradient != nil }
+    var debugFlowAnimating: Bool {
+        highlights.contains { $0.sublayers?.first?.sublayers?.first?.animation(forKey: "flowPosition") != nil }
+    }
     var debugGlyphAlphas: [CGFloat] {
         var result = [CGFloat](repeating: active ? 0.44 : 0.34, count: stringValue.utf16.count)
         for (cue, tile) in zip(cues, highlights) {
@@ -58,10 +66,14 @@ final class LyricTextView: NSView {
     }
     override func layout() { super.layout(); refreshRenderingLayout() }
     override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); refreshRenderingLayout() }
+    override func viewDidChangeBackingProperties() { super.viewDidChangeBackingProperties(); refreshRenderingLayout() }
 
     func update(line: LyricLine?, next: TimeInterval?, elapsed: TimeInterval, style: LyricsAnimationStyle,
-                appearance: LyricsAppearance, font: NSFont, active: Bool, centered: Bool, running: Bool) {
-        let rebuild = self.line != line || self.style != style || self.lyricAppearance.colorRGB != appearance.colorRGB || self.font != font || self.active != active || self.centered != centered || nextTime != next
+                appearance: LyricsAppearance, font: NSFont, active: Bool, centered: Bool, running: Bool,
+                flowPalette: LyricFlowPalette = .rgb, compact: Bool = false) {
+        let flowChanged = self.lyricAppearance.flowStyle != appearance.flowStyle || self.flowPalette != flowPalette || self.compact != compact
+        let rebuild = self.line != line || self.style != style || self.lyricAppearance.colorRGB != appearance.colorRGB ||
+            self.font != font || self.active != active || self.centered != centered || nextTime != next || flowChanged
         let glowChanged = self.lyricAppearance.glow != appearance.glow
         let reduceMotion = IslandPreferences.shared.reduceMotion
         let resync = clock == nil || clock?.playing != running || self.reduceMotion != reduceMotion || abs(elapsedNow - elapsed) > 0.065
@@ -69,6 +81,8 @@ final class LyricTextView: NSView {
         self.reduceMotion = reduceMotion
         self.line = line; self.style = style; self.lyricAppearance = appearance; self.font = font
         self.active = active; self.centered = centered; nextTime = next
+        self.flowPalette = flowPalette
+        self.compact = compact
         let text = line?.text ?? ""
         if stringValue != text { stringValue = text; setAccessibilityValue(text) }
         if rebuild { lastSize = .zero }
@@ -81,12 +95,15 @@ final class LyricTextView: NSView {
         if rebuilt || resync {
             clock = (elapsed, CACurrentMediaTime(), running)
             schedule(elapsed: elapsed, running: running)
+        } else if glowChanged, flowGradient != nil {
+            schedule(elapsed: elapsedNow, running: running)
         }
     }
 
     func copyPresentation(from other: LyricTextView) {
         update(line: other.line, next: other.nextTime, elapsed: other.elapsedNow, style: other.style,
-               appearance: other.lyricAppearance, font: other.font, active: other.active, centered: other.centered, running: false)
+               appearance: other.lyricAppearance, font: other.font, active: other.active, centered: other.centered,
+               running: false, flowPalette: other.flowPalette, compact: other.compact)
     }
 
     func suspend(release: Bool = false) {
@@ -98,10 +115,11 @@ final class LyricTextView: NSView {
             let visible = tile.presentation()?.opacity ?? tile.opacity
             tile.removeAllAnimations(); tile.opacity = visible
         }
+        scheduleFlow(elapsed: elapsed, running: false, host: CACurrentMediaTime())
         if release {
             base.contents = nil
             highlights.forEach { $0.removeFromSuperlayer() }; highlights.removeAll()
-            raster = nil; normal = nil; hdrGain = 1
+            raster = nil; normal = nil; flowGradient = nil; hdrGain = 1
             lastSize = .zero
         }
     }
@@ -115,18 +133,19 @@ final class LyricTextView: NSView {
         let scale = window?.backingScaleFactor ?? 2
         let gain = LyricHDR.requestedGain(enabled: active && style == .appleMusic && lyricAppearance.hdrEnabled && !isHiddenOrHasHiddenAncestor,
                                           strength: lyricAppearance.hdrStrength,
-                                          potential: window?.screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1)
+                                          potential: window?.screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1,
+                                          usesDisplayPeak: usesFlow)
         let geometryChanged = lastSize != bounds.size || lastScale != scale
         guard geometryChanged || hdrGain != gain else { return false }
         CATransaction.begin(); CATransaction.setDisableActions(true); defer { CATransaction.commit() }
         if !geometryChanged {
             updateHighlightImage(gain: gain)
-            return false
+            return usesFlow
         }
         lastSize = bounds.size; lastScale = scale
         highlights.forEach { $0.removeFromSuperlayer() }; highlights.removeAll()
         cues.removeAll(keepingCapacity: true)
-        raster = nil; normal = nil; hdrGain = 1
+        raster = nil; normal = nil; flowGradient = nil; hdrGain = 1
         base.frame = bounds
         guard let line, bounds.width > 0, bounds.height > 0,
               let raster = LyricRaster(line: line.text, font: font, size: bounds.size, scale: scale, centered: centered),
@@ -142,6 +161,7 @@ final class LyricTextView: NSView {
             guard maxX > minX else { continue }
             cues.append(cue)
             let tile = CALayer()
+            tile.allowsGroupOpacity = false
             tile.frame = CGRect(x: minX / scale, y: 0, width: (maxX - minX) / scale, height: bounds.height)
             tile.contentsRect = CGRect(x: minX / CGFloat(raster.width), y: 0,
                                        width: (maxX - minX) / CGFloat(raster.width), height: 1)
@@ -156,16 +176,35 @@ final class LyricTextView: NSView {
 
     private func configureGlow(_ tile: CALayer) {
         tile.shadowColor = lyricAppearance.color.cgColor
-        tile.shadowOpacity = Float(lyricAppearance.glow * 0.65)
-        tile.shadowRadius = 1 + 4 * lyricAppearance.glow
+        if usesFlow {
+            let strength = lyricAppearance.glow
+            tile.shadowOpacity = Float(compact ? 0.52 + 0.32 * strength : 0.46 + 0.34 * strength)
+            tile.shadowRadius = compact ? 2 + 1.6 * strength : 3 + 2.5 * strength
+        } else {
+            tile.shadowOpacity = Float(lyricAppearance.glow * 0.65)
+            tile.shadowRadius = 1 + 4 * lyricAppearance.glow
+        }
         tile.shadowOffset = .zero
     }
 
     private func updateHighlightImage(gain: CGFloat) {
         guard !highlights.isEmpty, let raster, let normal else { return }
+        if usesFlow, let gradient = LyricFlowGradient(palette: flowPalette, gain: gain) {
+            flowGradient = gradient
+            hdrGain = gain
+            for tile in highlights {
+                tile.contents = nil
+                tile.sublayers?.forEach { $0.removeFromSuperlayer() }
+                tile.addSublayer(gradient.makeLayer(stencil: normal, rect: tile.contentsRect,
+                                                     rowWidth: CGFloat(raster.width) / raster.scale, height: tile.bounds.height))
+            }
+            return
+        }
+        flowGradient = nil
         let extended = gain > 1 ? raster.image(color: lyricAppearance.color, gain: gain) : nil
         hdrGain = extended == nil ? 1 : gain
         for tile in highlights {
+            tile.sublayers?.forEach { $0.removeFromSuperlayer() }
             tile.contents = extended ?? normal
             if #available(macOS 26.0, *) {
                 tile.preferredDynamicRange = extended == nil ? .standard : .constrainedHigh
@@ -179,6 +218,7 @@ final class LyricTextView: NSView {
         CATransaction.begin(); CATransaction.setDisableActions(true); defer { CATransaction.commit() }
         let host = CACurrentMediaTime()
         let animate = running && style == .appleMusic && !reduceMotion
+        scheduleFlow(elapsed: elapsed, running: animate, host: host)
         for (cue, tile) in zip(cues, highlights) {
             let progress = reduceMotion ? (elapsed >= cue.start ? 1.0 : 0.0) : cue.progress(at: elapsed)
             tile.removeAnimation(forKey: "highlight")
@@ -194,6 +234,15 @@ final class LyricTextView: NSView {
             fade.fillMode = .backwards
             fade.timingFunction = CAMediaTimingFunction(name: .linear)
             tile.add(fade, forKey: "highlight")
+        }
+    }
+
+    private func scheduleFlow(elapsed: TimeInterval, running: Bool, host: TimeInterval) {
+        guard let flowGradient, let raster else { return }
+        let width = CGFloat(raster.width) / raster.scale
+        for tile in highlights {
+            flowGradient.animate(tile, rowWidth: width, elapsed: reduceMotion ? (line?.time ?? 0) : elapsed,
+                                 running: running && !isHiddenOrHasHiddenAncestor, host: host)
         }
     }
 }

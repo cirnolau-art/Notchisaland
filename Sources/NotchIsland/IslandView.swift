@@ -370,6 +370,7 @@ final class IslandView: NSView {
         let artist: String
     }
     private var lyricTrack: LyricTrack?
+    private var flowArtwork: (image: CGImage, palette: LyricFlowPalette?)?
 
     private var musicLyricsHeight: CGFloat {
         let font = NSFont.systemFont(ofSize: lyricsAppearance.size + 4, weight: lyricsAppearance.weight.fontWeight)
@@ -1255,8 +1256,9 @@ final class IslandView: NSView {
         let pair = wrappedInfo.lyricLine(at: now)
         if compact { setCompactLyricsVisible(pair.current != nil) }
         if !compact || pair.current != nil {
+            let palette = pair.current != nil && style == .appleMusic ? lyricFlowPalette(for: info.artwork) : .rgb
             lyrics?.update(current: pair.current, next: pair.next, elapsed: elapsed, style: style,
-                           appearance: lyricsAppearance, animated: animated, running: info.isPlaying)
+                           appearance: lyricsAppearance, animated: animated, running: info.isPlaying, flowPalette: palette)
         }
 
         let nextSegment: TimeInterval?
@@ -1283,6 +1285,23 @@ final class IslandView: NSView {
         timer.tolerance = style == .appleMusic ? 0.008 : 0.02
         lyricTimer = timer
         RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func lyricFlowPalette(for artwork: CGImage?) -> LyricFlowPalette {
+        guard lyricsAppearance.flowStyle == .artwork else { return .rgb }
+        guard let artwork else { flowArtwork = nil; return .white }
+        if flowArtwork?.image === artwork { return flowArtwork?.palette ?? .white }
+        flowArtwork = (artwork, nil)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let palette = LyricFlowPalette(artwork: artwork)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.flowArtwork?.image === artwork else { return }
+                self.flowArtwork?.palette = palette
+                guard self.mediaInfo?.artwork === artwork, self.lyricsAppearance.flowStyle == .artwork else { return }
+                self.refreshLyrics(allowScroll: false)
+            }
+        }
+        return .white
     }
 
     private func hideCompactLyrics() {

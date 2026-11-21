@@ -53,7 +53,7 @@ final class LyricRollView: FlippedView {
         if outgoing.frame != row { outgoing.frame = row }
     }
     func update(current: LyricLine?, next: LyricLine?, elapsed: TimeInterval, style: LyricsAnimationStyle,
-                appearance: LyricsAppearance, animated: Bool, running: Bool = true) {
+                appearance: LyricsAppearance, animated: Bool, running: Bool = true, flowPalette: LyricFlowPalette = .rgb) {
         let changed = currentLine != current
         let layoutChanged = laidOutSize != bounds.size || self.lyricAppearance.size != appearance.size
             || self.lyricAppearance.weight != appearance.weight
@@ -67,7 +67,8 @@ final class LyricRollView: FlippedView {
             outgoing.isHidden = false; outgoing.copyPresentation(from: incoming)
         }
         incoming.update(line: current, next: next?.time, elapsed: elapsed, style: style, appearance: lyricAppearance,
-                        font: lyricFont(for: lyricAppearance), active: true, centered: placement != .side, running: running)
+                        font: lyricFont(for: lyricAppearance), active: true, centered: placement != .side,
+                        running: running, flowPalette: flowPalette, compact: placement == .compact)
         if placement != .compact {
             upcoming.update(line: next, next: nil, elapsed: elapsed, style: style, appearance: appearance,
                             font: lyricFont(for: appearance), active: false, centered: placement != .side, running: false)

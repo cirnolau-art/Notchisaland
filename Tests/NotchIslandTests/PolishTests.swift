@@ -42,14 +42,49 @@ final class LyricRenderingPolicyTests: XCTestCase {
         XCTAssertEqual(LyricHDR.requestedGain(enabled: false, strength: 1, potential: 8), 1)
         XCTAssertEqual(LyricHDR.requestedGain(enabled: true, strength: 1, potential: 1.4), 1.4, accuracy: 0.001)
         XCTAssertLessThanOrEqual(LyricHDR.requestedGain(enabled: true, strength: 1, potential: 8), 2)
+        XCTAssertEqual(LyricHDR.requestedGain(enabled: true, strength: 1, potential: 8, usesDisplayPeak: true), 8)
+        XCTAssertEqual(LyricHDR.requestedGain(enabled: true, strength: 0.5, potential: 8, usesDisplayPeak: true), 4.5)
         let data = try PropertyListSerialization.data(fromPropertyList: ["width": 142.0, "glow": 0.7], format: .binary, options: 0)
         let old = try PropertyListDecoder().decode(LyricsAppearance.self, from: data)
         XCTAssertEqual(old.width, 142); XCTAssertEqual(old.glow, 0.7)
         XCTAssertFalse(old.hdrEnabled)
+        XCTAssertEqual(old.flowStyle, .off)
+        var selected = old
+        selected.flowStyle = .artwork
+        let encoded = try PropertyListEncoder().encode(selected)
+        XCTAssertEqual(try PropertyListDecoder().decode(LyricsAppearance.self, from: encoded), selected)
     }
 }
 
 final class LyricPixelTests: XCTestCase {
+    func testFlowFreezesWhenPausedAndReleasesWhenHidden() throws {
+        guard !IslandPreferences.shared.reduceMotion else { throw XCTSkip("Reduce Motion is enabled") }
+        for compact in [true, false] {
+            let row = LyricTextView(frame: CGRect(x: 0, y: 0, width: 150, height: 30))
+            var appearance = LyricsAppearance()
+            appearance.flowStyle = .rgb
+            let line = LyricLine(time: 1, text: "星光")
+            func sample(running: Bool, style: LyricsAnimationStyle = .appleMusic) {
+                row.update(line: line, next: 8, elapsed: 2, style: style, appearance: appearance,
+                           font: .systemFont(ofSize: 15), active: true, centered: true, running: running,
+                           compact: compact)
+            }
+            sample(running: true)
+            XCTAssertTrue(row.debugFlowActive)
+            XCTAssertTrue(row.debugFlowAnimating)
+            XCTAssertTrue(row.debugGlowActive)
+            sample(running: false)
+            XCTAssertTrue(row.debugFlowActive)
+            XCTAssertFalse(row.debugFlowAnimating)
+            sample(running: true, style: .efficient)
+            XCTAssertFalse(row.debugFlowActive)
+            sample(running: true)
+            row.suspend(release: true)
+            XCTAssertFalse(row.debugFlowActive)
+            XCTAssertFalse(row.debugFlowAnimating)
+        }
+    }
+
     func testHDRGlyphPayloadContainsExtendedLinearPixelsAndTransparentBackground() throws {
         let raster = try XCTUnwrap(LyricRaster(line: "星光 ABC", font: .systemFont(ofSize: 16), size: CGSize(width: 180, height: 32), scale: 2, centered: true))
         let image = try XCTUnwrap(raster.image(color: .white, gain: 1.6))

@@ -66,7 +66,38 @@ final class LyricCompositingTests: XCTestCase {
         container.backgroundColor = NSColor.black.cgColor
         container.masksToBounds = true
         container.addSublayer(highlight)
+        let peak = try renderPeak(of: container, bounds: bounds, device: device, queue: queue)
+        XCTAssertGreaterThan(peak, 1.15, "Core Animation compressed HDR lyrics into SDR")
+    }
 
+    func testFlowingGradientPreservesHDRThroughTheGlyphStencil() throws {
+        guard #available(macOS 26.0, *),
+              let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
+            throw XCTSkip("Metal and macOS 26 are required for the compositing check")
+        }
+        let bounds = CGRect(x: 0, y: 0, width: 160, height: 42)
+        let raster = try XCTUnwrap(LyricRaster(line: "Daylight", font: .boldSystemFont(ofSize: 24), size: bounds.size, scale: 1, centered: true))
+        let stencil = try XCTUnwrap(raster.image(color: .white, gain: 1))
+        let gradient = try XCTUnwrap(LyricFlowGradient(palette: .rgb, gain: 3))
+        let tile = CALayer()
+        tile.frame = bounds
+        tile.shadowColor = NSColor.systemPurple.cgColor
+        tile.shadowOpacity = 0.52
+        tile.shadowRadius = 2
+        tile.allowsGroupOpacity = false
+        tile.addSublayer(gradient.makeLayer(stencil: stencil, rect: CGRect(x: 0, y: 0, width: 1, height: 1),
+                                           rowWidth: bounds.width, height: bounds.height))
+        let container = CALayer()
+        container.frame = bounds
+        container.backgroundColor = NSColor.black.cgColor
+        container.addSublayer(tile)
+        let peak = try renderPeak(of: container, bounds: bounds, device: device, queue: queue)
+        XCTAssertGreaterThan(peak, 1.15, "Core Animation compressed the flowing gradient into SDR")
+    }
+
+    private func renderPeak(of container: CALayer, bounds: CGRect, device: MTLDevice, queue: MTLCommandQueue) throws -> Float16 {
+        let width = Int(bounds.width)
+        let height = Int(bounds.height)
         let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.extendedLinearSRGB))
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: width, height: height, mipmapped: false)
         descriptor.usage = [.renderTarget, .shaderRead]
@@ -86,8 +117,7 @@ final class LyricCompositingTests: XCTestCase {
 
         var pixels = [Float16](repeating: 0, count: width * height * 4)
         texture.getBytes(&pixels, bytesPerRow: width * 8, from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
-        let peak = stride(from: 0, to: pixels.count, by: 4).map { pixels[$0] }.max() ?? 0
-        XCTAssertGreaterThan(peak, 1.15, "Core Animation compressed HDR lyrics into SDR")
+        return stride(from: 0, to: pixels.count, by: 4).map { pixels[$0] }.max() ?? 0
     }
 
     private func descendants(of view: NSView) -> [NSView] {

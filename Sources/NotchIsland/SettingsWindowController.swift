@@ -310,6 +310,10 @@ private struct IslandSettingsView: View {
             lyricSlider("文字光晕", value: $lyricsAppearance.glow, range: 0...1,
                         formatted: "\(Int((lyricsAppearance.glow * 100).rounded()))%")
             if lyricsAnimation == .appleMusic {
+                Picker("歌词流光", selection: $lyricsAppearance.flowStyle) {
+                    ForEach(LyricFlowStyle.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
                 Toggle("HDR 歌词高亮", isOn: $lyricsAppearance.hdrEnabled)
             }
             if lyricsAppearance.hdrEnabled && lyricsAnimation == .appleMusic {
