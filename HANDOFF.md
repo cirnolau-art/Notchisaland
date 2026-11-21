@@ -56,8 +56,13 @@
 - **1.7.9 · 构建验证**：本机登录桌面会话中完整测试 128 项全部通过，日志为 `/private/tmp/notchisland-179-desktop-tests.log`。生产构建、临时签名、DMG 校验及打包后隔离快照检查通过。自动化验证覆盖真实 HUD 层的浮点图像与峰值余量标记，物理媒体键、鼠标/触控板方向和实屏 HDR 亮度待复核。
 - **1.7.10 · 歌词流光**：歌词外观新增默认关闭的 RGB 和封面流光，支持收起与展开。已唱部分仍按原歌词时间高亮，收起时字边泛光更集中，字芯偏白。封面取色在后台运行，单色封面保留自身色调，灰阶或缺封面时使用白光。暂停冻结，省资源模式停用流光。完整测试 133 项通过，浮点合成确认字形遮罩后的流光仍有超 SDR 输出。
 - **1.7.10 · 打包验证**：签名、启动检查和安装包校验通过。在本机 macOS 27.3 用打包版预览两档流光的收起与展开画面，暂停前后取样区域哈希一致。截图为 `/private/tmp/notchisland-1710-screen.BGkDzY/flow-review.jpg`。当前 HDR 浮点合成和本机屏幕余量已核对，尚未测量面板实际亮度。
+- **1.7.10 · GitHub Release 配图**：通过本地 API 的 Gemini 3.1 Flash Image 生成并检查了版本封面、RGB 流光和封面取色流光三张静态宣传图，存于 `/Users/kachunlau/Documents/ChatGPT/ceshi/notchisland-1.7.10-release-images/`。
+- **1.7.10 · 实机演示图**：已在本机用 Apple Music 播放 IVE 的《XOXZ》，确认收起和展开均显示歌词，分别截取 RGB 流光和封面流光的四张窗口截图。成品位于 `/Users/kachunlau/Documents/ChatGPT/ceshi/notchisland-1.7.10-release-images/XOXZ/`。
 
 ## 待办（按优先级）
+
+- **发布素材**：用户从宣传图和《XOXZ》实机截图中选图，自行上传到 GitHub Release。
+
 
 - **P0 · 歌词流光用户复核**：用真实播放和不同封面检查收起歌词泛光、连贯切色及 HDR 观感。隔离预览可用 `r`、`a`、`s` 切换流光，`p` 暂停。
 
