@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="NotchIsland 是原生 macOS 灵动岛工具。音乐、流光歌词和系统提示，在屏幕顶部随手可见。">
+  <title>NotchIsland · 把日常放在屏幕顶端</title>
+  <link rel="icon" type="image/png" href="./assets/icon.png">
+  <link rel="stylesheet" href="./style.css">
+  <script src="./theme.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">跳到正文</a>
+  <header class="bar">
+    <nav class="wrap nav" aria-label="页面导航">
+      <a class="brand" href="#top"><img src="./assets/icon.png" width="28" height="28" alt="">NotchIsland</a>
+      <div class="nav-links">
+        <a href="#lyrics">歌词</a>
+        <a href="#features">功能</a>
+        <a href="#download">下载</a>
+        <div class="theme" hidden>
+          <label class="sr-only" for="theme">网页外观</label>
+          <select id="theme" title="网页外观">
+            <option value="system">跟随系统</option>
+            <option value="light">浅色</option>
+            <option value="dark">深色</option>
+          </select>
+        </div>
+      </div>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section id="top" class="hero" aria-labelledby="title">
+      <div class="wrap hero-copy">
+        <p class="version">macOS 版 · 1.8.4</p>
+        <h1 id="title">NotchIsland</h1>
+        <p class="tagline">把日常放在屏幕顶端。</p>
+        <p class="intro">音乐、流光歌词和系统提示，抬眼就能看到。点一下刘海，展开播放和常用操作。</p>
+        <div class="actions">
+          <a class="button" href="https://github.com/cirnolau-art/Notchisaland/releases/tag/v1.8.4">下载 macOS 版 <span aria-hidden="true">↓</span></a>
+          <a class="text-link" href="https://github.com/cirnolau-art/Notchisaland">查看源码 <span aria-hidden="true">↗</span></a>
+        </div>
+        <small>Apple 芯片 · macOS 15 或更新版本</small>
+      </div>
+      <figure class="wrap hero-demo">
+        <img src="./assets/compact.png" width="1320" height="106" alt="收起的 NotchIsland 在刘海两侧显示歌词与播放状态">
+        <figcaption>收起状态实机截图 · 1.7.10</figcaption>
+      </figure>
+    </section>
+
+    <section id="lyrics" class="band lyrics" aria-labelledby="lyrics-title">
+      <div class="wrap">
+        <div class="section-intro">
+          <p class="eyebrow">歌词与流光</p>
+          <h2 id="lyrics-title">跟着唱，也跟着亮。</h2>
+          <p>收起时，歌词随换句上下滚动。展开时，上一句、当前句、下一句和再下一句依次排开，当前句更亮，旁边三句也看得清。</p>
+        </div>
+        <div class="showcase">
+          <figure>
+            <img src="./assets/lyrics-rgb.jpg" width="1264" height="848" loading="lazy" alt="RGB 流光效果示意，歌词字边带有彩色光晕">
+            <figcaption>RGB 流光效果示意</figcaption>
+          </figure>
+          <div class="lyric-details">
+            <article>
+              <h3>有时间轴，逐字走。</h3>
+              <p>有可靠的逐字时间轴时，渐亮、羽化、上浮和 HDR 高亮跟着同一进度变化。长句自动换行，暂停时停在当前进度。</p>
+            </article>
+            <article>
+              <h3>整句也带光。</h3>
+              <p>普通 LRC 按句显示。RGB 流光让颜色在字间流动，封面流光则取色于正在播放的专辑封面。</p>
+            </article>
+            <small>歌词动画设为「Apple Music 风格」后，可在「外观 → 歌词外观」设置流光和 HDR。逐字 HDR 需要可靠的逐字时间轴及支持 HDR 的显示器。省资源模式使用整句显示。</small>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="band features" aria-labelledby="features-title">
+      <div class="wrap">
+        <div class="section-intro">
+          <p class="eyebrow">刘海里的日常</p>
+          <h2 id="features-title">一收一展，刚刚好。</h2>
+          <p>收起时以纯黑贴住屏幕顶边。展开可选纯黑、标准液态玻璃、轻模糊或清透玻璃，外框保持连续圆角。</p>
+          <small>原生液态玻璃适用于 macOS 26 或更新版本。较早版本和开启「减少透明度」时使用纯黑外观。</small>
+        </div>
+        <figure class="expanded-demo">
+          <img src="./assets/expanded.png" width="1440" height="596" loading="lazy" alt="展开的 NotchIsland 显示专辑封面、播放进度、播放控制与右侧歌词">
+          <figcaption>展开播放器实机截图 · 1.7.10</figcaption>
+        </figure>
+        <div class="feature-list">
+          <article>
+            <h3>音乐随手控</h3>
+            <p>自动跟随 Music 或 Spotify，显示歌名、封面和进度，提供播放控制。</p>
+          </article>
+          <article>
+            <h3>系统动静，抬眼可见</h3>
+            <p>音量、亮度、输入法、电源和通知提示，连同 AirPods 电量与音频输出切换。</p>
+          </article>
+          <article>
+            <h3>常用操作有入口</h3>
+            <p>专注、倒计时、闹钟与日历。展开后也能暂存文件、查看剪贴板历史或打开快捷指令。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="download" class="band download" aria-labelledby="download-title">
+      <div class="wrap">
+        <h2 id="download-title">下载 NotchIsland</h2>
+        <p class="install">打开 DMG，把 NotchIsland 拖到「应用程序」。</p>
+        <div class="actions">
+          <a class="button" href="https://github.com/cirnolau-art/Notchisaland/releases/tag/v1.8.4">前往 1.8.4 发布页 <span aria-hidden="true">↓</span></a>
+          <a class="text-link" href="https://github.com/cirnolau-art/Notchisaland/releases">历代版本 <span aria-hidden="true">↗</span></a>
+        </div>
+        <div class="notes">
+          <p><small>1.8.4 · 构建 26。适用于 Apple 芯片及 macOS 15 或更新版本。DMG 采用本地 ad-hoc 签名，尚未公证。</small></p>
+          <p><small>首次使用时，按功能需要授予辅助功能、自动化、蓝牙或日历权限。音量与亮度提示依赖媒体键接管和辅助功能权限。AirPods 自动提示以 Mac 实际切换音频输出为准。</small></p>
+          <p><small>歌词优先使用本地 LRC。开启在线查找时，应用会向 LRCLIB 提交曲名、歌手、专辑和时长。查找也可能通过网易云音乐检索曲名与歌手。</small></p>
+          <p><small>1.8.4 的快照检查中，省资源模式的换句滚动仍有异常。详见 <a href="https://github.com/cirnolau-art/Notchisaland/releases/tag/v1.8.4">版本记录</a>。</small></p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="wrap footer">
+    <small>© 2026 Lau Kachun</small>
+    <a href="https://github.com/cirnolau-art/Notchisaland">GitHub</a>
+    <a href="https://github.com/cirnolau-art/Notchisaland/blob/main/LICENSE">GPL-3.0</a>
+  </footer>
+</body>
+</html>

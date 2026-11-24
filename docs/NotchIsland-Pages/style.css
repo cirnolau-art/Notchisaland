@@ -1,0 +1,179 @@
+:root {
+  color-scheme: light;
+  --page: #fff;
+  --soft: #f5f5f7;
+  --text: #1d1d1f;
+  --muted: #53535b;
+  --note: #616168;
+  --line: #dcdce2;
+  --nav: #fffffff2;
+  --blue: #0066cc;
+  --button: #0068d4;
+  --button-hover: #0059b7;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --page: #141416;
+    --soft: #1d1d20;
+    --text: #f5f5f7;
+    --muted: #c2c2c8;
+    --note: #adaeb7;
+    --line: #414147;
+    --nav: #141416f2;
+    --blue: #76bbff;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #141416;
+  --soft: #1d1d20;
+  --text: #f5f5f7;
+  --muted: #c2c2c8;
+  --note: #adaeb7;
+  --line: #414147;
+  --nav: #141416f2;
+  --blue: #76bbff;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-padding-top: 72px; }
+body { margin: 0; background: var(--page); color: var(--text); }
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 4px; }
+button, select { font: inherit; }
+:focus-visible { outline: 3px solid #268aff; outline-offset: 4px; }
+img { display: block; max-width: 100%; height: auto; }
+figure, h1, h2, h3, p { margin: 0; }
+p { line-height: 1.7; }
+small, figcaption { font-size: 13px; line-height: 1.65; color: var(--note); }
+.wrap { width: min(1100px, calc(100% - 48px)); margin-inline: auto; }
+.sr-only, .skip:not(:focus) {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
+.skip:focus { position: fixed; top: 12px; left: 12px; z-index: 5; padding: 12px; background: var(--page); }
+
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  border-bottom: 1px solid var(--line);
+  background: var(--nav);
+  backdrop-filter: saturate(165%) blur(18px);
+}
+.nav, .nav-links, .brand, .actions, .footer { display: flex; align-items: center; }
+.nav { min-height: 56px; justify-content: space-between; gap: 14px; }
+.brand { gap: 8px; color: var(--text); font-size: 17px; font-weight: 650; white-space: nowrap; }
+.nav-links { gap: 24px; font-size: 14px; }
+.nav-links a { color: var(--muted); white-space: nowrap; }
+.theme select {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 3px 6px;
+  color: var(--text);
+  background: var(--soft);
+  font-size: 13px;
+}
+
+.hero {
+  position: relative;
+  isolation: isolate;
+  padding: 126px 0 48px;
+  text-align: center;
+  color: #f5f5f7;
+  background: #000 url("./assets/compact.png") center 20px / min(780px, 92%) auto no-repeat;
+  --note: #b4b4bc;
+}
+.hero-copy { position: relative; }
+.version { color: #b1b1ba; font-size: 14px; font-weight: 650; margin-bottom: 8px; }
+.hero h1 { font-size: 88px; font-weight: 730; line-height: 1.05; }
+.tagline { font-size: 38px; font-weight: 650; line-height: 1.25; margin-top: 12px; }
+.intro { color: #c8c8cf; max-width: 560px; margin: 16px auto 0; font-size: 17px; }
+.actions { gap: 22px; flex-wrap: wrap; }
+.hero .actions, .download .actions { justify-content: center; }
+.hero .actions { margin: 25px 0 12px; }
+.hero .text-link { color: #76bbff; }
+.button {
+  background: var(--button);
+  color: #fff;
+  border-radius: 100px;
+  padding: 11px 21px;
+  font-weight: 650;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.button:hover { background: var(--button-hover); text-decoration: none; }
+.text-link { font-weight: 600; }
+.hero-demo { margin-top: 33px; }
+.hero-demo img { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); }
+
+.band { padding: 84px 0; }
+.section-intro { max-width: 690px; margin-bottom: 36px; }
+.eyebrow { font-size: 15px; color: var(--muted); font-weight: 650; margin-bottom: 8px; }
+h2 { font-size: 49px; font-weight: 720; line-height: 1.14; }
+h3 { font-size: 22px; font-weight: 690; line-height: 1.3; }
+.section-intro p:last-of-type { font-size: 18px; color: var(--muted); margin-top: 14px; }
+.section-intro small { display: block; margin-top: 10px; }
+.showcase { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, .8fr); gap: 48px; align-items: center; }
+.showcase img, .expanded-demo img { border-radius: 8px; }
+figcaption { margin-top: 8px; }
+.lyric-details { display: grid; gap: 24px; }
+.lyric-details article p, .feature-list p { margin-top: 8px; color: var(--muted); }
+.features { background: var(--soft); }
+.expanded-demo img { width: 100%; }
+.feature-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; margin-top: 34px; }
+.feature-list article { border-top: 1px solid var(--line); padding-top: 18px; }
+.download { text-align: center; }
+.download .install { color: var(--muted); font-size: 18px; margin-top: 12px; }
+.download .actions { margin-top: 22px; }
+.notes {
+  max-width: 710px;
+  margin: 32px auto 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  text-align: left;
+}
+.notes p + p { margin-top: 6px; }
+.footer { border-top: 1px solid var(--line); min-height: 68px; flex-wrap: wrap; gap: 16px; font-size: 13px; }
+.footer a:first-of-type { margin-left: auto; }
+
+@media (max-height: 760px) and (min-width: 761px) {
+  .hero { padding-top: 104px; padding-bottom: 32px; }
+  .hero h1 { font-size: 74px; }
+  .band { padding-block: 66px; }
+}
+
+@media (max-width: 760px) {
+  .wrap { width: calc(100% - 36px); }
+  .nav-links { gap: 14px; }
+  .hero { padding: 86px 0 28px; background-position: center 13px; }
+  .hero h1 { font-size: 64px; }
+  .tagline { font-size: 30px; }
+  .hero-demo { margin-top: 24px; }
+  .band { padding: 54px 0; }
+  h2 { font-size: 38px; }
+  .showcase { grid-template-columns: 1fr; gap: 26px; }
+  .feature-list { gap: 18px; }
+}
+
+@media (max-width: 460px) {
+  .wrap { width: calc(100% - 30px); }
+  .nav { gap: 8px; }
+  .brand { font-size: 15px; gap: 4px; }
+  .brand img { width: 24px; height: 24px; }
+  .nav-links { gap: 11px; font-size: 13px; }
+  .nav-links a[href="#features"] { display: none; }
+  .hero h1 { font-size: 45px; }
+  .tagline { font-size: 25px; }
+  .intro { font-size: 16px; }
+  .hero .actions { margin-top: 19px; }
+  .feature-list { grid-template-columns: 1fr; }
+  h2 { font-size: 31px; }
+}
