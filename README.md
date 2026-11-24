@@ -1,6 +1,7 @@
 # NotchIsland
 
 原生 macOS 灵动岛工具，把音乐、系统提示和常用操作集中到屏幕顶部的刘海区域。
+<img width="1440" height="596" alt="rgb-expanded" src="https://github.com/user-attachments/assets/edd3ed2e-ece3-41d8-8e5f-d5e90b4f4e5a" />
 
 **1.8.4** 汇总了自 1.7.10 以来的歌词与界面改进。展开播放器可显示四行清晰歌词，普通 LRC 整句显示也能使用 RGB 或封面流光。详见 [版本更新记录](RELEASE.md#notchisland-184)。
 
@@ -23,6 +24,9 @@
 - 收起时整条贴顶纯黑，展开可选纯黑或 macOS 原生液态玻璃。展开与收起可从当前画面连续反向
 - 设置窗口跟随系统浅色和深色外观，macOS 26 及以上的操作按钮使用系统 Liquid Glass 样式
 - 每个模块都可以单独关闭
+<img width="660" height="53" alt="rgb-compact" src="https://github.com/user-attachments/assets/76b0138f-883b-4153-9c92-fedb6b4e7003" />
+<img width="1440" height="596" alt="artwork-expanded" src="https://github.com/user-attachments/assets/e02bb5dc-b89d-42ec-8984-0994fd60a0dc" />
+<img width="660" height="53" alt="rgb-compact" src="https://github.com/user-attachments/assets/bedcbbda-e1cc-4517-bfbd-4e7d746f3968" />
 
 ## 系统要求
 
