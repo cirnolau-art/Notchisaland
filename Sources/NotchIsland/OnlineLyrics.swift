@@ -174,7 +174,7 @@ actor OnlineLyricsProvider {
     }
 
     private func hasWordTiming(_ lines: [LyricLine]) -> Bool {
-        lines.contains { !$0.segments.isEmpty }
+        lines.contains(where: \.hasReliableWordTiming)
     }
 
     private func folded(_ value: String) -> String {

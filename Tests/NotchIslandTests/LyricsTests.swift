@@ -42,6 +42,24 @@ final class LyricsTests: XCTestCase {
         info.elapsed = 6
         XCTAssertEqual(info.lyricLine().current?.text, "二")
     }
+
+    func testLyricWindowProvidesFourStableRowsAroundCurrentLine() {
+        var info = MediaInfo(title: "Test", isPlaying: false, duration: 30, elapsed: 6)
+        info.lyrics = [
+            LyricLine(time: 0, text: "一"),
+            LyricLine(time: 5, text: "二"),
+            LyricLine(time: 10, text: "三"),
+            LyricLine(time: 15, text: "四"),
+            LyricLine(time: 20, text: "五")
+        ]
+
+        let window = info.lyricWindow()
+
+        XCTAssertEqual(window.previous?.text, "一")
+        XCTAssertEqual(window.current?.text, "二")
+        XCTAssertEqual(window.next?.text, "三")
+        XCTAssertEqual(window.nextNext?.text, "四")
+    }
     func testLongLineWrapsToDisplayWidthAndKeepsWordTiming() throws {
         var wrapper = LyricsWrapping()
         let line = LyricLine(time: 10, text: "这是一个很长的歌词句子需要在刘海宽度内自动换行",
@@ -56,6 +74,12 @@ final class LyricsTests: XCTestCase {
         XCTAssertEqual(lines.map(\.text).joined(), line.text + "下一句")
         XCTAssertEqual(lines.first?.segments.first?.time, 10)
         XCTAssertTrue(lines.dropFirst().dropLast().allSatisfy { $0.time >= 10 && $0.time < 20 })
+        let source = LyricHighlight.cues(for: line, next: 20, style: .appleMusic)
+        let wrapped = lines.dropLast().flatMap { LyricHighlight.cues(for: $0, next: nil, style: .appleMusic) }
+        func startsPerCodeUnit(_ cues: [LyricHighlight]) -> [TimeInterval] {
+            cues.flatMap { Array(repeating: $0.start, count: $0.range.length) }
+        }
+        XCTAssertEqual(startsPerCodeUnit(wrapped), startsPerCodeUnit(source))
     }
     func testIdleBluetoothConnectionCannotSubstituteForAnActiveAudioOutput() {
         var policy = AirPodsPresentationPolicy()

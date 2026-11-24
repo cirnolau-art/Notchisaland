@@ -16,11 +16,30 @@ struct LyricLine: Equatable {
     let time: TimeInterval
     let text: String
     let segments: [LyricSegment]
+    let wrappedCues: [LyricHighlight]?
 
-    init(time: TimeInterval, text: String, segments: [LyricSegment] = []) {
+    init(time: TimeInterval, text: String, segments: [LyricSegment] = [], wrappedCues: [LyricHighlight]? = nil) {
         self.time = time
         self.text = text
         self.segments = segments
+        self.wrappedCues = wrappedCues
+    }
+
+    var hasReliableWordTiming: Bool {
+        if let wrappedCues { return !wrappedCues.isEmpty }
+        guard time.isFinite, !segments.isEmpty, segments.map(\.text).joined() == text else { return false }
+        if segments.count == 1, segments[0].endTime == nil { return false }
+        var previousStart = -Double.infinity
+        var previousEnd: TimeInterval?
+        for segment in segments {
+            guard !segment.text.isEmpty, segment.time.isFinite, segment.time >= time - 0.001,
+                  segment.time > previousStart,
+                  previousEnd.map({ $0 <= segment.time + 0.001 }) ?? true,
+                  segment.endTime.map({ $0.isFinite && $0 > segment.time }) ?? true else { return false }
+            previousStart = segment.time
+            previousEnd = segment.endTime
+        }
+        return true
     }
 }
 
@@ -63,7 +82,6 @@ enum LyricsParser {
             if let firstTag = tags.first, starts.count == tags.count,
                starts.first.map({ $0 >= firstTime }) == true, isOrdered(starts) {
                 let prefix = bodySource.substring(to: firstTag.range.location)
-                if !prefix.isEmpty { segments.append(LyricSegment(time: firstTime, text: prefix, endTime: starts.first)) }
                 for (index, tag) in tags.enumerated() {
                     let start = NSMaxRange(tag.range)
                     let next = index + 1
@@ -73,7 +91,7 @@ enum LyricsParser {
                         segments.append(LyricSegment(time: starts[index], text: text, endTime: next < starts.count ? starts[next] : nil))
                     }
                 }
-                segments = trimmed(segments)
+                segments = prefix.trimmingCharacters(in: .whitespaces).isEmpty ? trimmed(segments) : []
             }
 
             for time in times {
@@ -182,15 +200,37 @@ enum LyricsStore {
 }
 
 extension MediaInfo {
-    func lyricLine(at date: Date = Date()) -> (current: LyricLine?, next: LyricLine?) {
-        guard !lyrics.isEmpty else { return (nil, nil) }
+    typealias LyricWindow = (previous: LyricLine?, current: LyricLine?, next: LyricLine?, nextNext: LyricLine?)
+
+    func lyricWindow(at date: Date = Date()) -> LyricWindow {
+        guard !lyrics.isEmpty else { return (nil, nil, nil, nil) }
         let elapsed = interpolated(at: date).elapsed
         let index = lyrics.lastIndex(where: { $0.time <= elapsed })
-        guard let index else { return (nil, lyrics.first) }
-        let next = lyrics.indices.contains(index + 1) ? lyrics[index + 1] : nil
+        guard let index else {
+            return (nil, nil, lyrics.first, lyrics.indices.contains(1) ? lyrics[1] : nil)
+        }
+
+        let previous = index > lyrics.startIndex ? lyrics[index - 1] : nil
         let current = lyrics[index]
-        if let end = current.hideTime(next: next?.time, duration: duration), elapsed >= end { return (nil, next) }
-        return (current, next)
+        let next = lyrics.indices.contains(index + 1) ? lyrics[index + 1] : nil
+        let nextNext = lyrics.indices.contains(index + 2) ? lyrics[index + 2] : nil
+        if let end = current.hideTime(next: next?.time, duration: duration), elapsed >= end {
+            return (previous, nil, next, nextNext)
+        }
+        return (previous, current, next, nextNext)
+    }
+
+    func lyricWindow() -> LyricWindow {
+        lyricWindow(at: Date())
+    }
+
+    func lyricLine(at date: Date = Date()) -> (current: LyricLine?, next: LyricLine?) {
+        let window = lyricWindow(at: date)
+        return (window.current, window.next)
+    }
+
+    func lyricLine() -> (current: LyricLine?, next: LyricLine?) {
+        lyricLine(at: Date())
     }
 }
 
@@ -198,7 +238,7 @@ extension LyricLine {
     /// Only explicit source timing can identify an instrumental gap in an LRC line.
     func hideTime(next: TimeInterval?, duration: TimeInterval) -> TimeInterval? {
         var result: TimeInterval? = duration > 0 ? duration : nil
-        if let end = segments.last?.endTime, next == nil || next! > end + 2 {
+        if hasReliableWordTiming, let end = segments.last?.endTime, next == nil || next! > end + 2 {
             result = min(result ?? .infinity, end + 1)
         }
         return result

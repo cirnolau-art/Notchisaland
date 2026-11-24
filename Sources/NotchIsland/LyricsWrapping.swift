@@ -40,7 +40,10 @@ struct LyricsWrapping {
         }
         guard ranges.count > 1 else { return [line] }
         var position = 0
-        let timedRanges = line.segments.map { segment in
+        let timed = line.hasReliableWordTiming
+        let sourceCues = timed ? LyricHighlight.cues(for: line, next: nextTime > line.time ? nextTime : nil,
+                                                   style: .appleMusic) : []
+        let timedRanges = (timed ? line.segments : []).map { segment in
             let range = NSRange(location: position, length: segment.text.utf16.count)
             position = NSMaxRange(range)
             return (range, segment)
@@ -54,12 +57,19 @@ struct LyricsWrapping {
                 guard intersection.length > 0 else { return nil }
                 return LyricSegment(time: segment.time, text: source.substring(with: intersection), endTime: segment.endTime)
             }
+            let cues = sourceCues.compactMap { cue -> LyricHighlight? in
+                let intersection = NSIntersectionRange(range, cue.range)
+                guard intersection.length > 0 else { return nil }
+                return LyricHighlight(range: NSRange(location: intersection.location - range.location,
+                                                     length: intersection.length),
+                                      start: cue.start, duration: cue.duration)
+            }
             let distributed = line.time + window * Double(index) / Double(ranges.count)
             let limit = line.time + window - minimumGap * Double(ranges.count - index)
-            let proposed = segments.first?.time ?? distributed
+            let proposed = cues.first?.start ?? distributed
             let start = index == 0 ? line.time : min(limit, max(previous + minimumGap, proposed))
             previous = start
-            return LyricLine(time: start, text: source.substring(with: range), segments: segments)
+            return LyricLine(time: start, text: source.substring(with: range), segments: segments, wrappedCues: cues)
         }
     }
 }

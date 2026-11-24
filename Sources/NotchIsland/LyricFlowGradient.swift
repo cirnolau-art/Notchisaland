@@ -55,12 +55,13 @@ struct LyricFlowGradient {
         return clip
     }
 
-    func animate(_ tile: CALayer, rowWidth: CGFloat, elapsed: TimeInterval, running: Bool, host: TimeInterval) {
+    func animate(_ tile: CALayer, tileFrame: CGRect, rowWidth: CGFloat,
+                 elapsed: TimeInterval, running: Bool, host: TimeInterval) {
         guard let strip = tile.sublayers?.first?.sublayers?.first else { return }
         let cycles = elapsed.isFinite ? elapsed / Self.period : 0
         let phase = cycles - floor(cycles)
-        let offset = tile.frame.midX / rowWidth
-        let start = -tile.frame.minX
+        let offset = tileFrame.midX / rowWidth
+        let start = -tileFrame.minX
         strip.removeAnimation(forKey: "flowPosition")
         tile.removeAnimation(forKey: "flowGlow")
         strip.position.x = start - rowWidth * phase

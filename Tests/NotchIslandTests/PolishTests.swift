@@ -30,10 +30,63 @@ final class LyricRenderingPolicyTests: XCTestCase {
         XCTAssertEqual(cues[0].progress(at: 11), 1)
         XCTAssertEqual(cues[1].progress(at: 11), 0)
     }
+
+    func testCharacterCuesSplitAWordIntoLeftToRightGlyphTiming() {
+        let line = LyricLine(time: 10, text: "星光", segments: [.init(time: 10, text: "星光", endTime: 12)])
+        let cues = LyricHighlight.cues(for: line, next: 14, style: .appleMusic)
+
+        XCTAssertEqual(cues.count, 2)
+        XCTAssertEqual(cues[0].range, NSRange(location: 0, length: 1))
+        XCTAssertEqual(cues[1].range, NSRange(location: 1, length: 1))
+        XCTAssertLessThan(cues[0].start, cues[1].start)
+    }
+
+    func testHighlightedGlyphsUseFeatherAndLiftAnimations() {
+        let row = LyricTextView(frame: CGRect(x: 0, y: 0, width: 180, height: 32))
+        let line = LyricLine(time: 1, text: "星光", segments: [
+            .init(time: 1, text: "星光", endTime: 3)
+        ])
+        row.update(line: line, next: 4, elapsed: 1.05, style: .appleMusic,
+                   appearance: LyricsAppearance(), font: .systemFont(ofSize: 18),
+                   active: true, centered: true, running: true)
+
+        XCTAssertTrue(row.debugHasFeatherMasks)
+        XCTAssertTrue(row.debugHasGlyphLiftAnimations)
+    }
     func testEfficientAndWholeLineLyricsNeverInventWordTiming() {
         let line = LyricLine(time: 3, text: "Stay here")
         XCTAssertEqual(LyricHighlight.cues(for: line, next: 10, style: .appleMusic).count, 1)
         XCTAssertEqual(LyricHighlight.cues(for: line, next: 10, style: .efficient).first?.progress(at: 3), 1)
+    }
+    func testUntimedOrUnreliableLyricsSwitchToASingleStaticLine() throws {
+        let timed = try XCTUnwrap(LyricsParser.parse("[00:01]<00:01>星<00:02>光<00:03>").first)
+        let plain = try XCTUnwrap(LyricsParser.parse("[00:04]只有整句").first)
+        let invalid = LyricLine(time: 4, text: "星光夜", segments: [
+            .init(time: 4, text: "星", endTime: 5), .init(time: 5, text: "夜", endTime: 6)
+        ])
+        var appearance = LyricsAppearance()
+        appearance.flowStyle = .rgb
+        appearance.hdrEnabled = true
+        for compact in [false, true] {
+            let row = LyricTextView(frame: CGRect(x: 0, y: 0, width: 180, height: 32))
+            func show(_ line: LyricLine, elapsed: TimeInterval) {
+                row.update(line: line, next: 8, elapsed: elapsed, style: .appleMusic,
+                           appearance: appearance, font: .systemFont(ofSize: 18),
+                           active: true, centered: true, running: true, compact: compact)
+            }
+            show(timed, elapsed: 1)
+            XCTAssertTrue(row.debugHasFeatherMasks)
+            for line in [plain, invalid] {
+                show(line, elapsed: line.time)
+                XCTAssertFalse(row.debugHasGlyphAnimations)
+                XCTAssertFalse(row.debugHasFeatherMasks)
+                XCTAssertFalse(row.debugHasGlyphLiftAnimations)
+                XCTAssertTrue(row.debugFlowActive)
+                XCTAssertTrue(row.debugFlowAnimating)
+                XCTAssertEqual(row.hdrGain, 1)
+                XCTAssertEqual(row.debugGlyphAlphas, Array(repeating: 1, count: line.text.utf16.count))
+            }
+        }
     }
     func testHDRLimitsAndLegacyAppearanceDecode() throws {
         XCTAssertEqual(LyricHDR.requestedGain(enabled: true, strength: 1, potential: 1), 1)
@@ -57,13 +110,31 @@ final class LyricRenderingPolicyTests: XCTestCase {
 }
 
 final class LyricPixelTests: XCTestCase {
+    func testUntimedLyricsKeepRGBFlowWithoutWordEffects() {
+        let row = LyricTextView(frame: CGRect(x: 0, y: 0, width: 180, height: 32))
+        var appearance = LyricsAppearance()
+        appearance.flowStyle = .rgb
+        let line = LyricLine(time: 1, text: "整句歌词")
+
+        row.update(line: line, next: 8, elapsed: 2, style: .appleMusic,
+                   appearance: appearance, font: .systemFont(ofSize: 16),
+                   active: true, centered: true, running: true)
+
+        XCTAssertTrue(row.debugFlowActive)
+        XCTAssertTrue(row.debugFlowAnimating)
+        XCTAssertFalse(row.debugHasFeatherMasks)
+        XCTAssertFalse(row.debugHasGlyphLiftAnimations)
+    }
+
     func testFlowFreezesWhenPausedAndReleasesWhenHidden() throws {
         guard !IslandPreferences.shared.reduceMotion else { throw XCTSkip("Reduce Motion is enabled") }
         for compact in [true, false] {
             let row = LyricTextView(frame: CGRect(x: 0, y: 0, width: 150, height: 30))
             var appearance = LyricsAppearance()
             appearance.flowStyle = .rgb
-            let line = LyricLine(time: 1, text: "星光")
+            let line = LyricLine(time: 1, text: "星光", segments: [
+                .init(time: 1, text: "星", endTime: 1.5), .init(time: 1.5, text: "光", endTime: 2)
+            ])
             func sample(running: Bool, style: LyricsAnimationStyle = .appleMusic) {
                 row.update(line: line, next: 8, elapsed: 2, style: style, appearance: appearance,
                            font: .systemFont(ofSize: 15), active: true, centered: true, running: running,
@@ -109,7 +180,8 @@ final class LyricPixelTests: XCTestCase {
         let row = LyricTextView(frame: CGRect(x: 0, y: 0, width: 150, height: 30))
         let line = LyricLine(time: 10, text: "星光", segments: [.init(time: 10, text: "星", endTime: 11), .init(time: 12, text: "光", endTime: 13)])
         row.update(line: line, next: 15, elapsed: 10, style: .appleMusic, appearance: LyricsAppearance(), font: .systemFont(ofSize: 15), active: true, centered: true, running: true)
-        XCTAssertEqual(row.debugGlyphAlphas, [1, 0.44])
+        XCTAssertEqual(row.debugGlyphAlphas.first ?? 0, 1, accuracy: 0.001)
+        XCTAssertEqual(row.debugGlyphAlphas.last ?? 0, 0.44, accuracy: 0.001)
         XCTAssertFalse(row.debugHasGlyphAnimations)
     }
     func testFontMetricsCenterActualGlyphsAtAllSupportedSizes() throws {

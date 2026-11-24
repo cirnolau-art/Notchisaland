@@ -23,22 +23,37 @@ final class LyricTextView: NSView {
     private var flowGradient: LyricFlowGradient?
     private var compact = false
     private var suspended = false
-    private var usesFlow: Bool { active && style == .appleMusic && lyricAppearance.flowStyle != .off }
+    private var usesWordTiming: Bool {
+        active && (line.map { LyricHighlight.usesWordTiming(for: $0, style: style) } ?? false)
+    }
+    private var usesFlow: Bool {
+        active && style == .appleMusic && line != nil && lyricAppearance.flowStyle != .off
+    }
     private var reduceMotion = false
     private var clock: (elapsed: TimeInterval, host: TimeInterval, playing: Bool)?
     private(set) var stringValue = ""
     private(set) var hdrGain: CGFloat = 1
     var debugHasGlyphAnimations: Bool { highlights.contains { $0.animation(forKey: "highlight") != nil } }
+    var debugHasGlyphLiftAnimations: Bool { highlights.contains { $0.animation(forKey: "highlightLift") != nil } }
+    var debugHasFeatherMasks: Bool { highlights.contains { $0.mask is CAGradientLayer } }
     var debugGlowActive: Bool { highlights.contains { $0.shadowOpacity > 0 } }
     var debugFlowActive: Bool { flowGradient != nil }
     var debugFlowAnimating: Bool {
         highlights.contains { $0.sublayers?.first?.sublayers?.first?.animation(forKey: "flowPosition") != nil }
     }
+    var debugRollBlurRadius: CGFloat {
+        guard let filter = layer?.filters?.first as? CIFilter,
+              let value = filter.value(forKey: kCIInputRadiusKey) as? NSNumber else { return 0 }
+        return CGFloat(value.doubleValue)
+    }
     var debugGlyphAlphas: [CGFloat] {
-        var result = [CGFloat](repeating: active ? 0.44 : 0.34, count: stringValue.utf16.count)
+        let baseAlpha = CGFloat(base.opacity)
+        var result = [CGFloat](repeating: baseAlpha, count: stringValue.utf16.count)
         for (cue, tile) in zip(cues, highlights) {
             let opacity = CGFloat(tile.presentation()?.opacity ?? tile.opacity)
-            for index in cue.range.location..<min(NSMaxRange(cue.range), result.count) { result[index] = 0.44 + 0.56 * opacity }
+            for index in cue.range.location..<min(NSMaxRange(cue.range), result.count) {
+                result[index] = baseAlpha + (1 - baseAlpha) * opacity
+            }
         }
         return result
     }
@@ -76,7 +91,8 @@ final class LyricTextView: NSView {
             self.font != font || self.active != active || self.centered != centered || nextTime != next || flowChanged
         let glowChanged = self.lyricAppearance.glow != appearance.glow
         let reduceMotion = IslandPreferences.shared.reduceMotion
-        let resync = clock == nil || clock?.playing != running || self.reduceMotion != reduceMotion || abs(elapsedNow - elapsed) > 0.065
+        let resync = clock == nil || clock?.playing != running || self.reduceMotion != reduceMotion
+            || abs(elapsedNow - elapsed) > 0.065
         suspended = false
         self.reduceMotion = reduceMotion
         self.line = line; self.style = style; self.lyricAppearance = appearance; self.font = font
@@ -92,7 +108,7 @@ final class LyricTextView: NSView {
             highlights.forEach(configureGlow)
             CATransaction.commit()
         }
-        if rebuilt || resync {
+        if rebuilt || resync || (reduceMotion && usesWordTiming) {
             clock = (elapsed, CACurrentMediaTime(), running)
             schedule(elapsed: elapsed, running: running)
         } else if glowChanged, flowGradient != nil {
@@ -106,17 +122,27 @@ final class LyricTextView: NSView {
                running: false, flowPalette: other.flowPalette, compact: other.compact)
     }
 
+    func setRollPresentation(alpha: CGFloat, blurRadius: CGFloat) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer?.opacity = Float(min(1, max(0, alpha)))
+        if blurRadius > 0 {
+            let filter = CIFilter(name: "CIGaussianBlur")
+            filter?.setValue(blurRadius, forKey: kCIInputRadiusKey)
+            layer?.filters = filter.map { [$0] }
+        } else {
+            layer?.filters = nil
+        }
+        CATransaction.commit()
+    }
+
     func suspend(release: Bool = false) {
         let elapsed = elapsedNow
         clock = (elapsed, CACurrentMediaTime(), false)
         suspended = true
-        CATransaction.begin(); CATransaction.setDisableActions(true); defer { CATransaction.commit() }
-        for tile in highlights {
-            let visible = tile.presentation()?.opacity ?? tile.opacity
-            tile.removeAllAnimations(); tile.opacity = visible
-        }
-        scheduleFlow(elapsed: elapsed, running: false, host: CACurrentMediaTime())
+        schedule(elapsed: elapsed, running: false)
         if release {
+            CATransaction.begin(); CATransaction.setDisableActions(true); defer { CATransaction.commit() }
             base.contents = nil
             highlights.forEach { $0.removeFromSuperlayer() }; highlights.removeAll()
             raster = nil; normal = nil; flowGradient = nil; hdrGain = 1
@@ -131,7 +157,7 @@ final class LyricTextView: NSView {
     private func rebuildIfNeeded() -> Bool {
         guard !suspended else { return false }
         let scale = window?.backingScaleFactor ?? 2
-        let gain = LyricHDR.requestedGain(enabled: active && style == .appleMusic && lyricAppearance.hdrEnabled && !isHiddenOrHasHiddenAncestor,
+        let gain = LyricHDR.requestedGain(enabled: usesWordTiming && lyricAppearance.hdrEnabled && !isHiddenOrHasHiddenAncestor,
                                           strength: lyricAppearance.hdrStrength,
                                           potential: window?.screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1,
                                           usesDisplayPeak: usesFlow)
@@ -140,7 +166,7 @@ final class LyricTextView: NSView {
         CATransaction.begin(); CATransaction.setDisableActions(true); defer { CATransaction.commit() }
         if !geometryChanged {
             updateHighlightImage(gain: gain)
-            return usesFlow
+            return true
         }
         lastSize = bounds.size; lastScale = scale
         highlights.forEach { $0.removeFromSuperlayer() }; highlights.removeAll()
@@ -151,23 +177,31 @@ final class LyricTextView: NSView {
               let raster = LyricRaster(line: line.text, font: font, size: bounds.size, scale: scale, centered: centered),
               let normal = raster.image(color: lyricAppearance.color, gain: 1) else { base.contents = nil; return true }
         base.contents = normal; base.contentsScale = scale
-        base.opacity = active ? 0.44 : 0.34
-        guard active else { return true }
+        base.opacity = active ? (usesWordTiming ? 0.44 : 1) : (compact ? 0.34 : 0.83)
+        guard usesWordTiming || usesFlow else { return true }
         self.raster = raster; self.normal = normal
-        for cue in LyricHighlight.cues(for: line, next: nextTime, style: style) {
+        let renderCues = usesWordTiming
+            ? LyricHighlight.cues(for: line, next: nextTime, style: style)
+            : [.init(range: NSRange(location: 0, length: line.text.utf16.count), start: line.time, duration: 0)]
+        for cue in renderCues {
             let region = raster.rect(for: cue.range)
             let minX = max(0, (region.minX * scale).rounded())
             let maxX = min(CGFloat(raster.width), (region.maxX * scale).rounded())
             guard maxX > minX else { continue }
-            cues.append(cue)
+            if usesWordTiming {
+                cues.append(cue)
+            }
             let tile = CALayer()
             tile.allowsGroupOpacity = false
             tile.frame = CGRect(x: minX / scale, y: 0, width: (maxX - minX) / scale, height: bounds.height)
             tile.contentsRect = CGRect(x: minX / CGFloat(raster.width), y: 0,
                                        width: (maxX - minX) / CGFloat(raster.width), height: 1)
             tile.contentsScale = scale
+            if usesWordTiming {
+                tile.mask = makeFeatherMask(frame: tile.bounds)
+            }
             configureGlow(tile)
-            tile.opacity = 0
+            tile.opacity = usesWordTiming ? 0 : 1
             layer?.addSublayer(tile); highlights.append(tile)
         }
         updateHighlightImage(gain: gain)
@@ -187,31 +221,64 @@ final class LyricTextView: NSView {
         tile.shadowOffset = .zero
     }
 
+    private func makeFeatherMask(frame: CGRect) -> CAGradientLayer {
+        let mask = CAGradientLayer()
+        mask.frame = frame
+        mask.startPoint = CGPoint(x: 0, y: 0.5)
+        mask.endPoint = CGPoint(x: 1, y: 0.5)
+        mask.colors = [NSColor.white.cgColor, NSColor.white.cgColor, NSColor.clear.cgColor]
+        mask.locations = [0, 0, 0.18]
+        return mask
+    }
+
+    private func updateFeatherMask(_ tile: CALayer, progress: Double) {
+        guard let mask = tile.mask as? CAGradientLayer else { return }
+        mask.locations = featherLocations(progress)
+    }
+
+    private func featherLocations(_ progress: Double) -> [NSNumber] {
+        let value = max(0, min(1, progress))
+        let feather = 0.18
+        return [0, NSNumber(value: value), NSNumber(value: min(1.05, value + feather))]
+    }
+
     private func updateHighlightImage(gain: CGFloat) {
         guard !highlights.isEmpty, let raster, let normal else { return }
-        if usesFlow, let gradient = LyricFlowGradient(palette: flowPalette, gain: gain) {
-            flowGradient = gradient
-            hdrGain = gain
-            for tile in highlights {
-                tile.contents = nil
-                tile.sublayers?.forEach { $0.removeFromSuperlayer() }
-                tile.addSublayer(gradient.makeLayer(stencil: normal, rect: tile.contentsRect,
-                                                     rowWidth: CGFloat(raster.width) / raster.scale, height: tile.bounds.height))
-            }
-            return
-        }
-        flowGradient = nil
-        let extended = gain > 1 ? raster.image(color: lyricAppearance.color, gain: gain) : nil
-        hdrGain = extended == nil ? 1 : gain
+        flowGradient = usesFlow ? LyricFlowGradient(palette: flowPalette, gain: 1) : nil
+        let extendedFlow = gain > 1 && flowGradient != nil ? LyricFlowGradient(palette: flowPalette, gain: gain) : nil
+        let extended = gain > 1 && flowGradient == nil ? raster.image(color: lyricAppearance.color, gain: gain) : nil
+        hdrGain = extendedFlow == nil && extended == nil ? 1 : gain
+        let rowWidth = CGFloat(raster.width) / raster.scale
         for tile in highlights {
             tile.sublayers?.forEach { $0.removeFromSuperlayer() }
-            tile.contents = extended ?? normal
-            if #available(macOS 26.0, *) {
-                tile.preferredDynamicRange = extended == nil ? .standard : .constrainedHigh
-            } else {
-                tile.wantsExtendedDynamicRangeContent = extended != nil
+            tile.contents = flowGradient == nil ? normal : nil
+            if let flowGradient {
+                tile.addSublayer(flowGradient.makeLayer(stencil: normal, rect: tile.contentsRect,
+                                                        rowWidth: rowWidth, height: tile.bounds.height))
+            }
+            if extended != nil || extendedFlow != nil {
+                // Mix the cached peak image over the SDR glyph using cue progress.
+                let hdr = CALayer()
+                hdr.name = "lyricHDR"
+                hdr.frame = tile.bounds
+                hdr.contentsRect = tile.contentsRect
+                hdr.contentsScale = tile.contentsScale
+                if let extendedFlow {
+                    hdr.addSublayer(extendedFlow.makeLayer(stencil: normal, rect: tile.contentsRect,
+                                                           rowWidth: rowWidth, height: tile.bounds.height))
+                } else {
+                    hdr.contents = extended
+                    if #available(macOS 26.0, *) { hdr.preferredDynamicRange = .constrainedHigh }
+                    else { hdr.wantsExtendedDynamicRangeContent = true }
+                }
+                tile.addSublayer(hdr)
             }
         }
+    }
+
+    private func hdrLayer(for tile: CALayer) -> CALayer? {
+        guard let layer = tile.sublayers?.last, layer.name == "lyricHDR" else { return nil }
+        return layer
     }
 
     private func schedule(elapsed: TimeInterval, running: Bool) {
@@ -222,27 +289,58 @@ final class LyricTextView: NSView {
         for (cue, tile) in zip(cues, highlights) {
             let progress = reduceMotion ? (elapsed >= cue.start ? 1.0 : 0.0) : cue.progress(at: elapsed)
             tile.removeAnimation(forKey: "highlight")
+            tile.removeAnimation(forKey: "highlightLift")
+            tile.mask?.removeAnimation(forKey: "highlightFeather")
+            let hdr = hdrLayer(for: tile)
+            hdr?.removeAnimation(forKey: "highlightGain")
+            updateFeatherMask(tile, progress: progress)
             tile.opacity = Float(progress)
+            hdr?.opacity = Float(progress)
+            let lift = reduceMotion ? 0 : -1.6 * progress
+            tile.transform = CATransform3DMakeTranslation(0, lift, 0)
             guard animate, progress < 1 else { continue }
             let duration = cue.duration * (1 - progress)
             guard duration > 0 else { continue }
+            let begin = host + max(0, cue.start - elapsed)
+            func animateProgress(_ layer: CALayer, key: String, path: String, from: Any, to: Any) {
+                let animation = CABasicAnimation(keyPath: path)
+                animation.fromValue = from
+                animation.toValue = to
+                animation.beginTime = layer.convertTime(begin, from: nil)
+                animation.duration = duration
+                animation.fillMode = .backwards
+                animation.timingFunction = CAMediaTimingFunction(name: .linear)
+                layer.add(animation, forKey: key)
+            }
             tile.opacity = 1
-            let fade = CABasicAnimation(keyPath: "opacity")
-            fade.fromValue = progress; fade.toValue = 1
-            fade.beginTime = tile.convertTime(host + max(0, cue.start - elapsed), from: nil)
-            fade.duration = duration
-            fade.fillMode = .backwards
-            fade.timingFunction = CAMediaTimingFunction(name: .linear)
-            tile.add(fade, forKey: "highlight")
+            animateProgress(tile, key: "highlight", path: "opacity", from: progress, to: 1)
+
+            if let mask = tile.mask as? CAGradientLayer {
+                mask.locations = featherLocations(1)
+                animateProgress(mask, key: "highlightFeather", path: "locations",
+                                from: featherLocations(progress), to: featherLocations(1))
+            }
+            tile.transform = CATransform3DMakeTranslation(0, -1.6, 0)
+            animateProgress(tile, key: "highlightLift", path: "transform.translation.y", from: lift, to: -1.6)
+            if let hdr {
+                hdr.opacity = 1
+                animateProgress(hdr, key: "highlightGain", path: "opacity", from: progress, to: 1)
+            }
         }
     }
 
     private func scheduleFlow(elapsed: TimeInterval, running: Bool, host: TimeInterval) {
         guard let flowGradient, let raster else { return }
         let width = CGFloat(raster.width) / raster.scale
+        let flowElapsed = reduceMotion ? (line?.time ?? 0) : elapsed
+        let playing = running && !isHiddenOrHasHiddenAncestor
         for tile in highlights {
-            flowGradient.animate(tile, rowWidth: width, elapsed: reduceMotion ? (line?.time ?? 0) : elapsed,
-                                 running: running && !isHiddenOrHasHiddenAncestor, host: host)
+            flowGradient.animate(tile, tileFrame: tile.frame, rowWidth: width, elapsed: flowElapsed,
+                                 running: playing, host: host)
+            if let hdr = hdrLayer(for: tile) {
+                flowGradient.animate(hdr, tileFrame: tile.frame, rowWidth: width, elapsed: flowElapsed,
+                                     running: playing, host: host)
+            }
         }
     }
 }

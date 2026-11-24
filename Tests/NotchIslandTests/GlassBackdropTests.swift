@@ -41,6 +41,8 @@ final class GlassBackdropTests: XCTestCase {
         XCTAssertEqual(effect.style, .regular)
         XCTAssertEqual(effect.tintColor?.alphaComponent ?? 0, 0.066, accuracy: 0.001)
         XCTAssertNotNil(effect.contentView)
+        XCTAssertEqual(effect.layer?.cornerRadius ?? 0, 24, accuracy: 0.001)
+        XCTAssertTrue(effect.layer?.masksToBounds == true)
         var ancestor = effect.superview
         while let view = ancestor {
             XCTAssertNil(view.layer?.mask, "A parent mask isolates the native compositor")

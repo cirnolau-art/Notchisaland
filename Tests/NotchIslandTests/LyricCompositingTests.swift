@@ -5,6 +5,29 @@ import XCTest
 @testable import NotchIsland
 
 final class LyricCompositingTests: XCTestCase {
+    func testActiveWordHighlightUsesFeatherMaskAndLiftAnimation() throws {
+        let bounds = CGRect(x: 0, y: 0, width: 220, height: 44)
+        let row = LyricTextView(frame: bounds)
+        var appearance = LyricsAppearance()
+        appearance.hdrEnabled = true
+        let segments = [
+            LyricSegment(time: 1, text: "唱", endTime: 1.5),
+            LyricSegment(time: 1.5, text: "到", endTime: 2)
+        ]
+        let line = LyricLine(time: 1, text: "唱到", segments: segments)
+        row.update(line: line, next: 3, elapsed: 1.2, style: .appleMusic,
+                   appearance: appearance, font: .boldSystemFont(ofSize: 22),
+                   active: true, centered: true, running: true)
+
+        XCTAssertTrue(row.debugHasGlyphAnimations)
+        let highlightLayers = try XCTUnwrap(row.layer?.sublayers).filter { $0 !== row.layer?.sublayers?.first }
+        XCTAssertTrue(highlightLayers.contains { $0.animation(forKey: "highlightLift") != nil })
+        XCTAssertTrue(highlightLayers.contains {
+            guard let mask = $0.mask else { return false }
+            return mask is CAGradientLayer && mask.animation(forKey: "highlightFeather") != nil
+        })
+    }
+
     func testExpandedLyricsHaveNoAncestorMaskOrRasterization() throws {
         let preferences = IslandPreferences.shared
         let storedPlacement = preferences.expandedLyricsPlacement
@@ -47,15 +70,39 @@ final class LyricCompositingTests: XCTestCase {
         appearance.hdrEnabled = true
         appearance.hdrStrength = 1
         appearance.glow = 0
-        row.update(line: LyricLine(time: 1, text: "Daylight"), next: nil, elapsed: 2,
-                   style: .appleMusic, appearance: appearance, font: .boldSystemFont(ofSize: 22),
-                   active: true, centered: true, running: false)
+        let line = LyricLine(time: 1, text: "AB", segments: [
+            .init(time: 1, text: "A", endTime: 1.5), .init(time: 1.5, text: "B", endTime: 2)
+        ])
+        func show(_ elapsed: TimeInterval, running: Bool = false) {
+            row.update(line: line, next: nil, elapsed: elapsed, style: .appleMusic, appearance: appearance,
+                       font: .boldSystemFont(ofSize: 22), active: true, centered: true, running: running)
+        }
+        show(1)
         XCTAssertGreaterThan(row.hdrGain, 1)
 
         let rowLayer = try XCTUnwrap(row.layer)
-        let contents = try XCTUnwrap(rowLayer.sublayers?.last)
+        let tile = try XCTUnwrap(rowLayer.sublayers?.dropFirst().first)
+        let contents = try XCTUnwrap(tile.sublayers?.first { $0.name == "lyricHDR" })
+        if !IslandPreferences.shared.reduceMotion {
+            XCTAssertEqual(contents.opacity, 0)
+            show(1.1, running: true)
+            let fade = try XCTUnwrap(tile.animation(forKey: "highlight") as? CABasicAnimation)
+            let gain = try XCTUnwrap(contents.animation(forKey: "highlightGain") as? CABasicAnimation)
+            let lift = try XCTUnwrap(tile.animation(forKey: "highlightLift") as? CABasicAnimation)
+            let feather = try XCTUnwrap(tile.mask?.animation(forKey: "highlightFeather") as? CABasicAnimation)
+            XCTAssertEqual(gain.duration, fade.duration, accuracy: 0.001)
+            XCTAssertEqual(lift.duration, fade.duration, accuracy: 0.001)
+            XCTAssertEqual(feather.duration, fade.duration, accuracy: 0.001)
+            show(1.1)
+            XCTAssertEqual(tile.opacity, 0.5, accuracy: 0.001)
+            XCTAssertEqual(contents.opacity, tile.opacity, accuracy: 0.001)
+            XCTAssertEqual(tile.transform.m42, -0.8, accuracy: 0.001)
+            XCTAssertNil(contents.animation(forKey: "highlightGain"))
+        }
+        show(1.3)
+        XCTAssertEqual(contents.opacity, 1, accuracy: 0.001)
         let highlight = CALayer()
-        highlight.frame = contents.frame
+        highlight.frame = tile.frame
         highlight.contents = contents.contents
         highlight.contentsRect = contents.contentsRect
         highlight.contentsScale = contents.contentsScale

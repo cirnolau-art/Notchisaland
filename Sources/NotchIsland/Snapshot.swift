@@ -300,7 +300,8 @@ enum SnapshotMode {
             view.applyAppearance()
             check(strip.sideExtension < originalWidth && strip.frame.midX == view.debugVisibleRect.midX, "Side width changes moved the notch")
             let currentField = descendants(strip).compactMap { $0 as? LyricTextView }.first { $0.stringValue == "第一行" }
-            check(currentField?.debugGlowActive == true, "Lyric glow not applied")
+            check(currentField?.debugGlowActive == false && currentField?.debugHasFeatherMasks == false,
+                  "Untimed lyrics did not use the plain line renderer")
         } else { failures.append("Side lyric view missing") }
         RunLoop.main.run(until: Date().addingTimeInterval(0.24))
         check(hasVisibleLine("第二行"), "Compact lyric missed the next timestamp without a player refresh")

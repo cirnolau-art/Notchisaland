@@ -2,7 +2,7 @@ import AppKit
 import Quartz
 
 final class IslandWindow: NSPanel {
-    static let windowSize = CGSize(width: 960, height: 370)
+    static let windowSize = CGSize(width: 960, height: 448)
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
     init() {

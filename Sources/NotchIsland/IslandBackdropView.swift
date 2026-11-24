@@ -107,6 +107,9 @@ final class IslandBackdropView: NSView {
             effect.cornerRadius = Self.glassRadius
             effect.contentView = NSView(frame: effect.bounds)
             effect.wantsLayer = true
+            effect.layer?.cornerRadius = Self.glassRadius
+            effect.layer?.cornerCurve = .continuous
+            effect.layer?.masksToBounds = true
             addSubview(effect, positioned: .below, relativeTo: overlays)
             CATransaction.begin(); CATransaction.setDisableActions(true)
             effect.layer?.opacity = spring == nil ? 1 : 0

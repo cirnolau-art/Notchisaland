@@ -373,8 +373,7 @@ final class IslandView: NSView {
     private var flowArtwork: (image: CGImage, palette: LyricFlowPalette?)?
 
     private var musicLyricsHeight: CGFloat {
-        let font = NSFont.systemFont(ofSize: lyricsAppearance.size + 4, weight: lyricsAppearance.weight.fontWeight)
-        return max(74, 2 * (ceil(font.ascender - font.descender + font.leading) + 8) + 11)
+        max(132, LyricRollView.expandedHeight(for: lyricsAppearance, placement: .below))
     }
     private var musicPanelWidth: CGFloat { max(360, notchWidth + 100) }
     private var sideLyricsPanelWidth: CGFloat { lyricsAppearance.width + 36 }
@@ -882,8 +881,11 @@ final class IslandView: NSView {
             let side = position == .side
             let lineWidth = min(lyricsAppearance.width, side ? sideLyricsPanelWidth - 32 : w - 48)
             let x = side ? w + 8 : (w - lineWidth) / 2
-            let lyrics = LyricRollView(frame: CGRect(x: x, y: side ? 88 : 239, width: lineWidth, height: side ? 112 : musicLyricsHeight),
-                                       placement: side ? .side : .below)
+            let layout: LyricRollView.Layout = side ? .side : .below
+            let lyricHeight = side ? LyricRollView.expandedHeight(for: lyricsAppearance, placement: layout) : musicLyricsHeight
+            let y = side ? (242 - lyricHeight) / 2 : 239
+            let lyrics = LyricRollView(frame: CGRect(x: x, y: y, width: lineWidth, height: lyricHeight),
+                                       placement: layout)
             lyrics.setGlassContrast((body.layer?.shadowOpacity ?? 0) > 0)
             // Keep extended-range glyphs outside the controls' silhouette mask.
             lyrics.frame = body.convert(lyrics.frame, to: self)
@@ -1253,23 +1255,27 @@ final class IslandView: NSView {
         let font = lyrics?.lyricFont(for: lyricsAppearance) ?? .systemFont(ofSize: lyricsAppearance.size, weight: lyricsAppearance.weight.fontWeight)
         let wrapped = lyricWrapper.lines(for: info.lyrics, width: width, font: font, duration: info.duration)
         let wrappedInfo = MediaInfo(isPlaying: info.isPlaying, duration: info.duration, elapsed: elapsed, sampledAt: now, lyrics: wrapped)
-        let pair = wrappedInfo.lyricLine(at: now)
-        if compact { setCompactLyricsVisible(pair.current != nil) }
-        if !compact || pair.current != nil {
-            let palette = pair.current != nil && style == .appleMusic ? lyricFlowPalette(for: info.artwork) : .rgb
-            lyrics?.update(current: pair.current, next: pair.next, elapsed: elapsed, style: style,
-                           appearance: lyricsAppearance, animated: animated, running: info.isPlaying, flowPalette: palette)
+        let window = wrappedInfo.lyricWindow(at: now)
+        if compact { setCompactLyricsVisible(window.current != nil) }
+        if !compact || window.current != nil {
+            let palette = window.current != nil && style == .appleMusic ? lyricFlowPalette(for: info.artwork) : .rgb
+            lyrics?.update(previous: window.previous, current: window.current, next: window.next,
+                           nextNext: window.nextNext, elapsed: elapsed, style: style,
+                           appearance: lyricsAppearance, animated: animated, running: info.isPlaying,
+                           flowPalette: palette)
         }
 
         let nextSegment: TimeInterval?
-        if style == .appleMusic && IslandPreferences.shared.reduceMotion {
-            nextSegment = pair.current?.segments.first(where: { $0.time > elapsed })?.time
+        if IslandPreferences.shared.reduceMotion, let current = window.current,
+           LyricHighlight.usesWordTiming(for: current, style: style) {
+            nextSegment = LyricHighlight.cues(for: current, next: window.next?.time, style: style)
+                .first(where: { $0.start > elapsed })?.start
         } else {
             nextSegment = nil
         }
-        let nextLineTime = pair.next?.time ?? .infinity
+        let nextLineTime = window.next?.time ?? .infinity
         let nextWordTime = nextSegment ?? .infinity
-        let nextHideTime = pair.current?.hideTime(next: pair.next?.time, duration: info.duration) ?? .infinity
+        let nextHideTime = window.current?.hideTime(next: window.next?.time, duration: info.duration) ?? .infinity
         let nextChange = min(nextLineTime, nextWordTime, nextHideTime)
         guard info.isPlaying, nextChange.isFinite, info.duration <= 0 || nextChange <= info.duration else {
             lyricTimer?.invalidate(); lyricTimer = nil
